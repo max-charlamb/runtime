@@ -36,6 +36,7 @@
 
 #if defined(FEATURE_JIT_PITCHING)
 
+// TODO: Is this include necessary? It doesn't look like it is used in this file
 #include "nibblemapmacros.h"
 #include "threadsuspend.h"
 
