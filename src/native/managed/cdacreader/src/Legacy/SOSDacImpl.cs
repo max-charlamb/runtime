@@ -362,6 +362,13 @@ internal sealed unsafe partial class SOSDacImpl
 
             if (data->bIsDynamic != 0)
             {
+                TargetPointer dynamicResolver = rtsContract.GetDynamicResolver(methodDescHandle);
+                if (dynamicResolver != TargetPointer.Null)
+                {
+                    // get managed resolver object off of dynamicResolver
+                    // fetch field off of managed object
+                    // add field to methodDescData
+                }
                 throw new NotImplementedException(); // TODO[cdac]: get the dynamic method managed object
             }
 

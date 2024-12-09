@@ -54,9 +54,12 @@ internal sealed class DynamicMethodDesc : IData<DynamicMethodDesc>
         Target.TypeInfo type = target.GetTypeInfo(DataType.DynamicMethodDesc);
 
         MethodName = target.ReadPointer(address + (ulong)type.Fields[nameof(MethodName)].Offset);
+        DynamicResolver = target.ReadPointer(address + (ulong)type.Fields[nameof(DynamicResolver)].Offset);
     }
 
     public TargetPointer MethodName { get; init; }
+
+    public TargetPointer DynamicResolver { get; init; }
 }
 
 internal sealed class StoredSigMethodDesc : IData<StoredSigMethodDesc>

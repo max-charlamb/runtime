@@ -262,6 +262,8 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
 
         public bool IsDynamicMethod => ExtendedFlags.HasFlag(DynamicMethodDescExtendedFlags.IsLCGMethod);
         public bool IsILStub => ExtendedFlags.HasFlag(DynamicMethodDescExtendedFlags.IsILStub);
+
+        public TargetPointer DynamicResolver => _desc.DynamicResolver;
     }
 
     private class StoredSigMethodDesc : IData<StoredSigMethodDesc>
@@ -1064,6 +1066,12 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         Debug.Assert(_methodTables[typeHandle.Address].IsCanonMT);
         TargetPointer addrOfSlot = GetAddressOfSlot(typeHandle, md.Slot);
         return _target.ReadCodePointer(addrOfSlot);
+    }
+
+    TargetPointer IRuntimeTypeSystem.GetDynamicResolver(MethodDescHandle methodDescHandle)
+    {
+        MethodDesc methodDesc = _methodDescs[methodDescHandle.Address];
+        return AsDynamicMethodDesc(methodDesc).DynamicResolver;
     }
 
     private class NonValidatedMethodTableQueries : MethodValidation.IMethodTableQueries
