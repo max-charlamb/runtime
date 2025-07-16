@@ -15,6 +15,7 @@ public interface IStackWalk : IContract
     public virtual IEnumerable<IStackDataFrameHandle> CreateStackWalk(ThreadData threadData) => throw new NotImplementedException();
     byte[] GetRawContext(IStackDataFrameHandle stackDataFrameHandle) => throw new NotImplementedException();
     TargetPointer GetFrameAddress(IStackDataFrameHandle stackDataFrameHandle) => throw new NotImplementedException();
+    TargetPointer GetMethodDescPointer(IStackDataFrameHandle stackDataFrameHandle) => throw new NotImplementedException();
     string GetFrameName(TargetPointer frameIdentifier) => throw new NotImplementedException();
 }
 

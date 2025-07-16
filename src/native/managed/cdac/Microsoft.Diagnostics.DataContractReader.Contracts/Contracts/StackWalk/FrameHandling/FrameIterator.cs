@@ -76,6 +76,47 @@ internal sealed class FrameIterator
         return currentFramePointer != terminator;
     }
 
+    public TargetPointer GetMethodDescFromFrame()
+    {
+        switch (GetFrameType(target, CurrentFrame.Identifier))
+        {
+            // FramedMethodFrame and its derived types store the MethodDesc in the Frame
+            case FrameType.FramedMethodFrame:
+            case FrameType.CLRToCOMMethodFrame:
+            case FrameType.PrestubMethodFrame:
+            case FrameType.CallCountingHelperFrame:
+            case FrameType.ExternalMethodFrame:
+            case FrameType.DynamicHelperFrame:
+                Data.FramedMethodFrame framedMethodFrame = target.ProcessedData.GetOrAdd<Data.FramedMethodFrame>(CurrentFrame.Address);
+                return framedMethodFrame.MethodDescPtr;
+
+            // Although PInvokeCalliFrame is derived from FramedMethodFrame, it is a special case.
+            // PInvokeCalliFrame does not store the MethodDesc in the Frame
+            case FrameType.PInvokeCalliFrame:
+                return TargetPointer.Null;
+
+            // Although StubDispatchFrame is derived from FramedMethodFrame, it is a special case.
+            // StubDispatchFrame can calculate the MethodDesc lazily from the MethodTable and slot
+            case FrameType.StubDispatchFrame:
+                throw new NotImplementedException();
+
+            case FrameType.InlinedCallFrame:
+                Data.InlinedCallFrame inlinedCallFrame = target.ProcessedData.GetOrAdd<Data.InlinedCallFrame>(CurrentFrame.Address);
+                bool hasActiveCall = ICFHasActiveCall(inlinedCallFrame);
+                bool hasFunction = ICFHasFunction(inlinedCallFrame);
+                if (hasActiveCall && hasFunction)
+                {
+                    ulong mask = ~((ulong)target.PointerSize - 1);
+                    return inlinedCallFrame.Datum & mask;
+                }
+                return TargetPointer.Null;
+            default:
+                // For all other Frame types, the MethodDesc is not stored in the Frame
+                // and we return TargetPointer.Null
+                return TargetPointer.Null;
+        }
+    }
+
     public void UpdateContextFromFrame(IPlatformAgnosticContext context)
     {
         switch (GetFrameType(target, CurrentFrame.Identifier))
@@ -143,7 +184,7 @@ internal sealed class FrameIterator
             return false;
         }
         Data.InlinedCallFrame inlinedCallFrame = target.ProcessedData.GetOrAdd<Data.InlinedCallFrame>(currentFramePointer);
-        return inlinedCallFrame.CallerReturnAddress != 0;
+        return ICFHasActiveCall(inlinedCallFrame);
     }
 
     public static string GetFrameName(Target target, TargetPointer frameIdentifier)
@@ -157,6 +198,23 @@ internal sealed class FrameIterator
     }
 
     public FrameType GetCurrentFrameType() => GetFrameType(target, CurrentFrame.Identifier);
+
+    private static bool ICFHasActiveCall(Data.InlinedCallFrame inlinedCallFrame)
+        => inlinedCallFrame.CallerReturnAddress != 0;
+
+    private bool ICFHasFunction(Data.InlinedCallFrame inlinedCallFrame)
+    {
+        // InlinedCallFrame::HasFunction
+        TargetPointer datum = inlinedCallFrame.Datum;
+        if (target.PointerSize == sizeof(ulong))
+        {
+            return datum != 0 && ((datum & 0x1) == 0);
+        }
+        else
+        {
+            return (((uint)datum.Value) & ~0xFFFFu) != 0;
+        }
+    }
 
     private static FrameType GetFrameType(Target target, TargetPointer frameIdentifier)
     {

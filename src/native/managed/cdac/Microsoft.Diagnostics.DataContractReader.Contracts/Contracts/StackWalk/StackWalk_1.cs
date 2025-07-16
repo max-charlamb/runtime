@@ -13,10 +13,12 @@ namespace Microsoft.Diagnostics.DataContractReader.Contracts;
 internal readonly struct StackWalk_1 : IStackWalk
 {
     private readonly Target _target;
+    private readonly IExecutionManager _eman;
 
     internal StackWalk_1(Target target)
     {
         _target = target;
+        _eman = target.Contracts.ExecutionManager;
     }
 
     public enum StackWalkState
@@ -37,7 +39,8 @@ internal readonly struct StackWalk_1 : IStackWalk
     private record StackDataFrameHandle(
         IPlatformAgnosticContext Context,
         StackWalkState State,
-        TargetPointer FrameAddress) : IStackDataFrameHandle
+        TargetPointer FrameAddress,
+        TargetPointer MethodDesc) : IStackDataFrameHandle
     { }
 
     private class StackWalkData(IPlatformAgnosticContext context, StackWalkState state, FrameIterator frameIter)
@@ -45,8 +48,9 @@ internal readonly struct StackWalk_1 : IStackWalk
         public IPlatformAgnosticContext Context { get; set; } = context;
         public StackWalkState State { get; set; } = state;
         public FrameIterator FrameIter { get; set; } = frameIter;
+        public TargetPointer MethodDesc { get; set; } = TargetPointer.Null;
 
-        public StackDataFrameHandle ToDataFrame() => new(Context.Clone(), State, FrameIter.CurrentFrameAddress);
+        public StackDataFrameHandle ToDataFrame() => new(Context.Clone(), State, FrameIter.CurrentFrameAddress, MethodDesc);
     }
 
     IEnumerable<IStackDataFrameHandle> IStackWalk.CreateStackWalk(ThreadData threadData)
@@ -114,15 +118,14 @@ internal readonly struct StackWalk_1 : IStackWalk
             return;
         }
 
-        bool isManaged = IsManaged(handle.Context.InstructionPointer, out _);
         bool validFrame = handle.FrameIter.IsValid();
 
-        if (isManaged)
+        if (IsManaged(handle.Context.InstructionPointer, out CodeBlockHandle? cbh))
         {
+            handle.MethodDesc = _eman.GetMethodDesc(cbh.Value);
             handle.State = StackWalkState.SW_FRAMELESS;
             if (CheckForSkippedFrames(handle))
             {
-                handle.State = StackWalkState.SW_SKIPPED_FRAME;
                 return;
             }
         }
@@ -152,7 +155,17 @@ internal readonly struct StackWalk_1 : IStackWalk
         IPlatformAgnosticContext parentContext = handle.Context.Clone();
         parentContext.Unwind(_target);
 
-        return handle.FrameIter.CurrentFrameAddress.Value < parentContext.StackPointer.Value;
+        bool skippedFrame = handle.FrameIter.CurrentFrameAddress.Value < parentContext.StackPointer.Value;
+
+        if (skippedFrame)
+        {
+            handle.MethodDesc = handle.FrameIter.GetMethodDescFromFrame();
+            handle.State = StackWalkState.SW_SKIPPED_FRAME;
+
+            // TODO(cdac): Handle ReportInteropMD
+        }
+
+        return skippedFrame;
     }
 
     byte[] IStackWalk.GetRawContext(IStackDataFrameHandle stackDataFrameHandle)
@@ -174,11 +187,17 @@ internal readonly struct StackWalk_1 : IStackWalk
     string IStackWalk.GetFrameName(TargetPointer frameIdentifier)
         => FrameIterator.GetFrameName(_target, frameIdentifier);
 
+
+    TargetPointer IStackWalk.GetMethodDescPointer(IStackDataFrameHandle stackDataFrameHandle)
+    {
+        StackDataFrameHandle handle = AssertCorrectHandle(stackDataFrameHandle);
+        return handle.MethodDesc;
+    }
+
     private bool IsManaged(TargetPointer ip, [NotNullWhen(true)] out CodeBlockHandle? codeBlockHandle)
     {
-        IExecutionManager eman = _target.Contracts.ExecutionManager;
         TargetCodePointer codePointer = CodePointerUtils.CodePointerFromAddress(ip, _target);
-        if (eman.GetCodeBlockHandle(codePointer) is CodeBlockHandle cbh && cbh.Address != TargetPointer.Null)
+        if (_eman.GetCodeBlockHandle(codePointer) is CodeBlockHandle cbh && cbh.Address != TargetPointer.Null)
         {
             codeBlockHandle = cbh;
             return true;

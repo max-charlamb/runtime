@@ -11,6 +11,7 @@ internal class InlinedCallFrame : IData<InlinedCallFrame>
     public InlinedCallFrame(Target target, TargetPointer address)
     {
         Target.TypeInfo type = target.GetTypeInfo(DataType.InlinedCallFrame);
+        Datum = target.ReadPointer(address + (ulong)type.Fields[nameof(Datum)].Offset);
         CallSiteSP = target.ReadPointer(address + (ulong)type.Fields[nameof(CallSiteSP)].Offset);
         CallerReturnAddress = target.ReadPointer(address + (ulong)type.Fields[nameof(CallerReturnAddress)].Offset);
         CalleeSavedFP = target.ReadPointer(address + (ulong)type.Fields[nameof(CalleeSavedFP)].Offset);
@@ -20,6 +21,7 @@ internal class InlinedCallFrame : IData<InlinedCallFrame>
     }
 
     public TargetPointer Address { get; }
+    public TargetPointer Datum { get; }
     public TargetPointer CallSiteSP { get; }
     public TargetPointer CallerReturnAddress { get; }
     public TargetPointer CalleeSavedFP { get; }

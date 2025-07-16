@@ -329,6 +329,34 @@ internal unsafe partial interface IXCLRDataProcess2 : IXCLRDataProcess
     int SetGcNotification(GcEvtArgs gcEvtArgs);
 }
 
+internal enum CLRDataSimpleFrameType : uint
+{
+    CLRDATA_SIMPFRAME_UNRECOGNIZED = 0x1,
+    CLRDATA_SIMPFRAME_MANAGED_METHOD = 0x2,
+    CLRDATA_SIMPFRAME_RUNTIME_MANAGED_CODE = 0x4,
+    CLRDATA_SIMPFRAME_RUNTIME_UNMANAGED_CODE = 0x8,
+}
+
+internal enum CLRDataDetailedFrameType : uint
+{
+    CLRDATA_DETFRAME_UNRECOGNIZED = 0,
+    CLRDATA_DETFRAME_UNKNOWN_STUB = CLRDATA_DETFRAME_UNRECOGNIZED + 1,
+    CLRDATA_DETFRAME_CLASS_INIT = CLRDATA_DETFRAME_UNKNOWN_STUB + 1,
+    CLRDATA_DETFRAME_EXCEPTION_FILTER = CLRDATA_DETFRAME_CLASS_INIT + 1,
+    CLRDATA_DETFRAME_SECURITY = CLRDATA_DETFRAME_EXCEPTION_FILTER + 1,
+    CLRDATA_DETFRAME_CONTEXT_POLICY = CLRDATA_DETFRAME_SECURITY + 1,
+    CLRDATA_DETFRAME_INTERCEPTION = CLRDATA_DETFRAME_CONTEXT_POLICY + 1,
+    CLRDATA_DETFRAME_PROCESS_START = CLRDATA_DETFRAME_INTERCEPTION + 1,
+    CLRDATA_DETFRAME_THREAD_START = CLRDATA_DETFRAME_PROCESS_START + 1,
+    CLRDATA_DETFRAME_TRANSITION_TO_MANAGED = CLRDATA_DETFRAME_THREAD_START + 1,
+    CLRDATA_DETFRAME_TRANSITION_TO_UNMANAGED = CLRDATA_DETFRAME_TRANSITION_TO_MANAGED + 1,
+    CLRDATA_DETFRAME_COM_INTEROP_STUB = CLRDATA_DETFRAME_TRANSITION_TO_UNMANAGED + 1,
+    CLRDATA_DETFRAME_DEBUGGER_EVAL = CLRDATA_DETFRAME_COM_INTEROP_STUB + 1,
+    CLRDATA_DETFRAME_CONTEXT_SWITCH = CLRDATA_DETFRAME_DEBUGGER_EVAL + 1,
+    CLRDATA_DETFRAME_FUNC_EVAL = CLRDATA_DETFRAME_CONTEXT_SWITCH + 1,
+    CLRDATA_DETFRAME_FINALLY = CLRDATA_DETFRAME_FUNC_EVAL + 1
+}
+
 [GeneratedComInterface]
 [Guid("E59D8D22-ADA7-49a2-89B5-A415AFCFC95F")]
 internal unsafe partial interface IXCLRDataStackWalk
@@ -349,15 +377,217 @@ internal unsafe partial interface IXCLRDataStackWalk
     int GetStackSizeSkipped(ulong* stackSizeSkipped);
 
     [PreserveSig]
-    int GetFrameType(/*CLRDataSimpleFrameType*/ uint* simpleType, /*CLRDataDetailedFrameType*/ uint* detailedType);
+    int GetFrameType(CLRDataSimpleFrameType* simpleType, CLRDataDetailedFrameType* detailedType);
     [PreserveSig]
-    int GetFrame(/*IXCLRDataFrame*/ void** frame);
+    int GetFrame(out IXCLRDataFrame? frame);
 
     [PreserveSig]
     int Request(uint reqCode, uint inBufferSize, byte* inBuffer, uint outBufferSize, byte* outBuffer);
 
     [PreserveSig]
     int SetContext2(uint flags, uint contextSize, [In, MarshalUsing(CountElementName = nameof(contextSize))] byte[] context);
+}
+
+[GeneratedComInterface]
+[Guid("271498C2-4085-4766-BC3A-7F8ED188A173")]
+internal unsafe partial interface IXCLRDataFrame
+{
+    [PreserveSig]
+    int GetFrameType(CLRDataSimpleFrameType* simpleType, CLRDataDetailedFrameType* detailedType);
+
+    [PreserveSig]
+    int GetContext(
+        uint contextFlags,
+        uint contextBufSize,
+        uint* contextSize,
+        [Out, MarshalUsing(CountElementName = nameof(contextBufSize))] byte[] contextBuf);
+
+    [PreserveSig]
+    int GetAppDomain(/*IXCLRDataAppDomain*/ void** appDomain);
+
+    [PreserveSig]
+    int GetNumArguments(uint* numArgs);
+
+    [PreserveSig]
+    int GetArgumentByIndex(
+        uint index,
+        /*IXCLRDataValue*/ void** arg,
+        uint bufLen,
+        uint* nameLen,
+        [Out, MarshalUsing(CountElementName = nameof(bufLen))] char[] name);
+
+    [PreserveSig]
+    int GetNumLocalVariables(uint* numLocals);
+
+    [PreserveSig]
+    int GetLocalVariableByIndex(
+        uint index,
+        /*IXCLRDataValue*/ void** localVariable,
+        uint bufLen,
+        uint* nameLen,
+        [Out, MarshalAs(UnmanagedType.LPArray)] char[] name);
+
+    [PreserveSig]
+    int GetCodeName(
+        uint flags,
+        uint bufLen,
+        uint* nameLen,
+        [Out, MarshalUsing(CountElementName = nameof(bufLen))] char[] nameBuf);
+
+    [PreserveSig]
+    int GetMethodInstance(/*IXCLRDataMethodInstance*/ void** method);
+
+    [PreserveSig]
+    int Request(uint reqCode, uint inBufferSize, byte* inBuffer, uint outBufferSize, byte* outBuffer);
+
+    [PreserveSig]
+    int GetNumTypeArguments(uint* numTypeArgs);
+
+    [PreserveSig]
+    int GetTypeArgumentByIndex(uint index, /*IXCLRDataTypeInstance*/ void** typeArg);
+}
+
+[GeneratedComInterface]
+[Guid("96EC93C7-1000-4e93-8991-98D8766E6666")]
+internal unsafe partial interface IXCLRDataValue
+{
+    [PreserveSig]
+    int GetFlags(uint* flags);
+
+    [PreserveSig]
+    int GetAddress(ClrDataAddress* address);
+
+    [PreserveSig]
+    int GetSize(ulong* size);
+
+    [PreserveSig]
+    int GetBytes(
+        uint bufLen,
+        uint* dataSize,
+        [Out, MarshalUsing(CountElementName = nameof(bufLen))] byte[] buffer);
+
+    [PreserveSig]
+    int SetBytes(
+        uint bufLen,
+        uint* dataSize,
+        [In, MarshalUsing(CountElementName = nameof(bufLen))] byte[] buffer);
+
+    [PreserveSig]
+    int GetType(/*IXCLRDataTypeInstance*/ void** typeInstance);
+
+    [PreserveSig]
+    int GetNumFields(uint* numFields);
+
+    [PreserveSig]
+    int GetFieldByIndex(
+        uint index,
+        /*IXCLRDataValue*/ void** field,
+        uint bufLen,
+        uint* nameLen,
+        void* nameBuf,
+        /*mdFieldDef*/ uint* token);
+
+    [PreserveSig]
+    int Request(uint reqCode, uint inBufferSize, byte* inBuffer, uint outBufferSize, byte* outBuffer);
+
+    [PreserveSig]
+    int GetNumFields2(uint flags, /*IXCLRDataTypeInstance*/ void* fromType, uint* numFields);
+
+    [PreserveSig]
+    int StartEnumFields(uint flags, /*IXCLRDataTypeInstance*/ void* fromType, ulong* handle);
+
+    [PreserveSig]
+    int EnumField(
+        ulong* handle,
+        /*IXCLRDataValue*/ void** field,
+        uint nameBufLen,
+        uint* nameLen,
+        void* nameBuf,
+        /*mdFieldDef*/ uint* token);
+
+    [PreserveSig]
+    int EndEnumFields(ulong handle);
+
+    [PreserveSig]
+    int StartEnumFieldsByName(
+        char* name,
+        uint nameFlags,
+        uint fieldFlags,
+        /*IXCLRDataTypeInstance*/ void* fromType,
+        ulong* handle);
+
+    [PreserveSig]
+    int EnumFieldByName(ulong* handle, /*IXCLRDataValue*/ void** field, /*mdFieldDef*/ uint* token);
+
+    [PreserveSig]
+    int EndEnumFieldsByName(ulong handle);
+
+    [PreserveSig]
+    int GetFieldByToken(
+        /*mdFieldDef*/ uint token,
+        /*IXCLRDataValue*/ void** field,
+        uint bufLen,
+        uint* nameLen,
+        void* nameBuf);
+
+    [PreserveSig]
+    int GetAssociatedValue(/*IXCLRDataValue*/ void** assocValue);
+
+    [PreserveSig]
+    int GetAssociatedType(/*IXCLRDataTypeInstance*/ void** assocType);
+
+    [PreserveSig]
+    int GetString(
+        uint bufLen,
+        uint* strLen,
+        [Out, MarshalUsing(CountElementName = nameof(bufLen))] char[] str);
+
+    [PreserveSig]
+    int GetArrayProperties(
+        uint* rank,
+        uint* totalElements,
+        uint numDim,
+        [Out, MarshalUsing(CountElementName = nameof(numDim))] uint[] dims,
+        uint numBases,
+        [Out, MarshalUsing(CountElementName = nameof(numBases))] int[] bases);
+
+    [PreserveSig]
+    int GetArrayElement(
+        uint numInd,
+        [In, MarshalUsing(CountElementName = nameof(numInd))] int[] indices,
+        /*IXCLRDataValue*/ void** value);
+
+    [PreserveSig]
+    int EnumField2(
+        ulong* handle,
+        /*IXCLRDataValue*/ void** field,
+        uint nameBufLen,
+        uint* nameLen,
+        [Out, MarshalUsing(CountElementName = nameof(nameBufLen))] char[] nameBuf,
+        /*IXCLRDataModule*/ void** tokenScope,
+        /*mdFieldDef*/ uint* token);
+
+    [PreserveSig]
+    int EnumFieldByName2(
+        ulong* handle,
+        /*IXCLRDataValue*/ void** field,
+        /*IXCLRDataModule*/ void** tokenScope,
+        /*mdFieldDef*/ uint* token);
+
+    [PreserveSig]
+    int GetFieldByToken2(
+        /*IXCLRDataModule*/ void* tokenScope,
+        /*mdFieldDef*/ uint token,
+        /*IXCLRDataValue*/ void** field,
+        uint bufLen,
+        uint* nameLen,
+        [Out, MarshalUsing(CountElementName = nameof(bufLen))] char[] nameBuf);
+
+    [PreserveSig]
+    int GetNumLocations(uint* numLocs);
+
+    [PreserveSig]
+    int GetLocationByIndex(uint loc, uint* flags, ClrDataAddress* arg);
 }
 
 [GeneratedComInterface]

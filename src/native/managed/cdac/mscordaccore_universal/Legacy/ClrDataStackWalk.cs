@@ -84,9 +84,31 @@ internal sealed unsafe partial class ClrDataStackWalk : IXCLRDataStackWalk
         return hr;
     }
 
-    int IXCLRDataStackWalk.GetFrame(void** frame)
-        => _legacyImpl is not null ? _legacyImpl.GetFrame(frame) : HResults.E_NOTIMPL;
-    int IXCLRDataStackWalk.GetFrameType(uint* simpleType, uint* detailedType)
+    int IXCLRDataStackWalk.GetFrame(out IXCLRDataFrame? frame)
+    {
+        frame = null;
+
+        if (!_currentFrameIsValid)
+        {
+            return HResults.E_INVALIDARG;
+        }
+
+        IXCLRDataFrame? legacyFrame = null;
+        if (_legacyImpl is not null)
+        {
+            int hr = _legacyImpl.GetFrame(out legacyFrame);
+            if (hr < 0)
+                return hr;
+        }
+
+        frame = new ClrDataFrame(
+            _target,
+            _dataFrames.Current,
+            legacyFrame);
+        return HResults.S_OK;
+    }
+
+    int IXCLRDataStackWalk.GetFrameType(CLRDataSimpleFrameType* simpleType, CLRDataDetailedFrameType* detailedType)
         => _legacyImpl is not null ? _legacyImpl.GetFrameType(simpleType, detailedType) : HResults.E_NOTIMPL;
     int IXCLRDataStackWalk.GetStackSizeSkipped(ulong* stackSizeSkipped)
         => _legacyImpl is not null ? _legacyImpl.GetStackSizeSkipped(stackSizeSkipped) : HResults.E_NOTIMPL;

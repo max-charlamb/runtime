@@ -1268,6 +1268,7 @@ template<>
 struct cdac_data<FramedMethodFrame>
 {
     static constexpr size_t TransitionBlockPtr = offsetof(FramedMethodFrame, m_pTransitionBlock);
+    static constexpr size_t MethodDescPtr = offsetof(FramedMethodFrame, m_pMD);
 };
 
 #ifdef FEATURE_COMINTEROP
