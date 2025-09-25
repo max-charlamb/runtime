@@ -1401,10 +1401,10 @@ BOOL GcNotifications::SetNotification(GcEvtArgs ev)
 
         if (iFirstFree == Length() &&
             iFirstFree == GetTableSize())
-    {
-            // No more room
-        return FALSE;
-    }
+        {
+                // No more room
+            return FALSE;
+        }
 
         // guarantee the free cell is zeroed out
         m_gcTable[iFirstFree].SetFree();

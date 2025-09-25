@@ -668,7 +668,6 @@ DWORD_PTR dwAddr
     return 0;
 }
 
-#if !defined(DACCESS_COMPILE)
 /****************************************************************************
 * GetStackBacktrace *
 *-------------------*
@@ -780,7 +779,6 @@ CONTEXT * pContext      // Context to use (or NULL to use current)
     LOCAL_ASSERT(nElements == (UINT)(pdw - pdwEip));
     return nElements;
 }
-#endif // !defined(DACCESS_COMPILE)
 
 /****************************************************************************
 * GetStringFromSymbolInfo *
@@ -830,7 +828,6 @@ __out_ecount (cchMaxAssertStackLevelStringLen) CHAR *pszString     // @parm Plac
     LOCAL_ASSERT(strlen(pszString) < cchMaxAssertStackLevelStringLen);
 }
 
-#if !defined(DACCESS_COMPILE)
 
 /****************************************************************************
 * GetStringFromStackLevels *
@@ -894,7 +891,6 @@ CONTEXT * pContext  // @parm Context to start the stack trace at; null for curre
 
     LOCAL_ASSERT(strlen(pszString) <= cchMaxAssertStackLevelStringLen * cfrTotal);
 }
-#endif // !defined(DACCESS_COMPILE)
 
 /****************************************************************************
 * GetStringFromAddr *

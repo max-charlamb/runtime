@@ -25,6 +25,9 @@
 #include "dbgutil.h"
 #include "cdac.h"
 #include <clrconfignocache.h>
+#include <iostream>
+#include <fstream>
+#include "stacktrace.h"
 
 #ifdef USE_DAC_TABLE_RVA
 #include <dactablerva.h>
@@ -3126,6 +3129,14 @@ ClrDataAccess::ClrDataAccess(ICorDebugDataTarget * pTarget, ICLRDataTarget * pLe
     // see ClrDataAccess::VerifyDlls for details.
     m_fEnableDllVerificationAsserts = false;
 #endif
+
+    char filename1[256];
+    sprintf_s(filename1, sizeof(filename1), "C:\\Users\\maxcharlamb\\temp\\enum_mem_output_%d.txt", GetCurrentProcessId());
+    m_enumMemFile.open(filename1, std::ios_base::app);
+
+    char filename2[256];
+    sprintf_s(filename2, sizeof(filename2), "C:\\Users\\maxcharlamb\\temp\\dac_instantiate_%d.txt", GetCurrentProcessId());
+    m_instantiatedFile.open(filename2, std::ios_base::app);
 }
 
 ClrDataAccess::~ClrDataAccess(void)
@@ -3162,6 +3173,9 @@ ClrDataAccess::~ClrDataAccess(void)
     }
     m_pTarget->Release();
     m_pMutableTarget->Release();
+
+    m_enumMemFile.close();
+    m_instantiatedFile.close();
 }
 
 STDMETHODIMP
@@ -6131,6 +6145,8 @@ MethodDesc * ClrDataAccess::FindLoadedMethodRefOrDef(Module* pModule,
     RETURN pModule->LookupMethodDef(memberRef);
 } // FindLoadedMethodRefOrDef
 
+CHAR g_stackTraceBuffer[20000];
+
 //
 // ReportMem - report a region of memory for dump gathering
 //
@@ -6158,6 +6174,16 @@ bool ClrDataAccess::ReportMem(TADDR addr, TSIZE_T size, bool fExpectSuccess /*= 
     static TSIZE_T debugSize;
     debugAddr = addr;
     debugSize = size;
+
+    GetStringFromStackLevels(
+        0,
+        19,
+        g_stackTraceBuffer
+    );
+    m_enumMemFile << "------\n";
+    m_enumMemFile << "Address: 0x" << std::hex << addr << ", Size: " << std::dec << size << "\n";
+    m_enumMemFile.write(g_stackTraceBuffer, strlen(g_stackTraceBuffer));
+    m_enumMemFile << "\n";
 
     HRESULT status;
     if (!addr || addr == (TADDR)-1 || !size)

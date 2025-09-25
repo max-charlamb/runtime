@@ -13,6 +13,59 @@ namespace Internal
     /// </summary>
     internal static partial class VersionResilientHashCode
     {
+        public struct HashCodeBuilder
+        {
+            private int _hash1;
+            private int _hash2;
+            private int _numCharactersHashed;
+
+            public HashCodeBuilder(ReadOnlySpan<byte> _)
+            {
+                _hash1 = 0x6DA3B944;
+                _hash2 = 0;
+                _numCharactersHashed = 0;
+            }
+
+            public void Append(ReadOnlySpan<byte> src)
+            {
+                if (src.Length == 0)
+                    return;
+
+                int startIndex = 0;
+                if ((_numCharactersHashed & 1) == 1)
+                {
+                    _hash2 = unchecked(_hash2 + RotateLeft(_hash2, 5)) ^ (int)unchecked((sbyte)src[0]);
+                    startIndex = 1;
+                }
+
+                for (int i = startIndex; i < src.Length; i += 2)
+                {
+                    _hash1 = unchecked(_hash1 + RotateLeft(_hash1, 5)) ^ (int)unchecked((sbyte)src[i]);
+                    if (i + 1 < src.Length)
+                    {
+                        _hash2 = unchecked(_hash2 + RotateLeft(_hash2, 5)) ^ (int)unchecked((sbyte)src[i + 1]);
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                _numCharactersHashed += src.Length;
+            }
+
+            public int ToHashCode()
+            {
+                if (_numCharactersHashed == 0)
+                    return 0;
+
+                int hash1 = unchecked(_hash1 + RotateLeft(_hash1, 8));
+                int hash2 = unchecked(_hash2 + RotateLeft(_hash2, 8));
+
+                return unchecked((int)(hash1 ^ hash2));
+            }
+        }
+
         /// <summary>
         /// CoreCLR <a href="https://github.com/dotnet/runtime/blob/17154bd7b8f21d6d8d6fca71b89d7dcb705ec32b/src/coreclr/vm/typehashingalgorithms.h#L14">ComputeNameHashCode</a>
         /// </summary>

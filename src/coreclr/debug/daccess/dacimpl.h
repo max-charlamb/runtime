@@ -28,6 +28,10 @@
 #endif //DAC_HASHTABLE
 extern CRITICAL_SECTION g_dacCritSec;
 
+#include <iostream>
+#include <fstream>
+#include "stacktrace.h"
+
 // Convert between CLRDATA_ADDRESS and TADDR.
 // Note that CLRDATA_ADDRESS is sign-extended (for compat with Windbg and OS conventions).  Converting
 // from pointer-size values to CLRDATA_ADDRESS should ALWAYS use this TO_CDADDR macro to avoid bugs when
@@ -1473,6 +1477,10 @@ private:
     GcNotification*  m_gcNotificationTable;
     TSIZE_T m_cbMemoryReported;
     DumpMemoryReportStatics m_dumpStats;
+
+public:
+    std::ofstream m_enumMemFile;
+    std::ofstream m_instantiatedFile;
 
     // If true, inconsistencies in the target will cause ASSERTs to be raised in DEBUG builds
     bool m_fEnableTargetConsistencyAsserts;

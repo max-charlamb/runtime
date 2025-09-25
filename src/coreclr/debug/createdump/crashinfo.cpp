@@ -133,6 +133,7 @@ CrashInfo::Release()
     return ref;
 }
 
+
 HRESULT STDMETHODCALLTYPE
 CrashInfo::EnumMemoryRegion(
     /* [in] */ CLRDATA_ADDRESS address,

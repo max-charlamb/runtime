@@ -17,6 +17,10 @@
 
 #include "gcinterface.h"
 #include "gcinterface.dac.h"
+
+#include <iostream>
+#include <fstream>
+#include "stacktrace.h"
 struct DacHostVtPtrs
 {
 #define VPTR_CLASS(name) PVOID name;
@@ -356,6 +360,8 @@ DacFreeVirtual(TADDR mem, ULONG32 size, ULONG32 typeFlags,
     return status;
 }
 
+CHAR g_stackTraceBuffer2[20000];
+
 PVOID
 DacInstantiateTypeByAddressHelper(TADDR addr, ULONG32 size, bool throwEx, bool fReport)
 {
@@ -386,6 +392,19 @@ DacInstantiateTypeByAddressHelper(TADDR addr, ULONG32 size, bool throwEx, bool f
             DacError(E_OUTOFMEMORY);
         }
         return NULL;
+    }
+
+    if (addr > 0x7ffa00000000)
+    {
+        GetStringFromStackLevels(
+            0,
+            19,
+            g_stackTraceBuffer2
+        );
+        g_dacImpl->m_instantiatedFile << "------\n";
+        g_dacImpl->m_instantiatedFile << "Address: 0x" << std::hex << addr << ", Size: " << std::dec << size << "\n";
+        g_dacImpl->m_instantiatedFile.write(g_stackTraceBuffer2, strlen(g_stackTraceBuffer2));
+        g_dacImpl->m_instantiatedFile << "\n";
     }
 
     //
