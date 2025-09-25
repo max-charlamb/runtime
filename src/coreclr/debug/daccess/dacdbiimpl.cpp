@@ -961,12 +961,11 @@ void DacDbiInterfaceImpl::GetILCodeAndSig(VMPTR_DomainAssembly vmDomainAssembly,
                                                            &methodRVA,
                                                            &implFlags));
 
-    MethodDesc* pMethodDesc =
-        FindLoadedMethodRefOrDef(pModule, functionToken);
-
     // If the RVA is 0 or it's native, then the method is not IL
     if (methodRVA == 0)
     {
+        MethodDesc* pMethodDesc = FindLoadedMethodRefOrDef(pModule, functionToken);
+
         LOG((LF_CORDB,LL_INFO100000, "DDI::GICAS: Function is not IL - methodRVA == NULL!\n"));
         // return (CORDBG_E_FUNCTION_NOT_IL);
         // Sanity check this....
@@ -992,7 +991,7 @@ void DacDbiInterfaceImpl::GetILCodeAndSig(VMPTR_DomainAssembly vmDomainAssembly,
         ThrowHR(CORDBG_E_FUNCTION_NOT_IL);
     }
 
-    *pLocalSigToken = GetILCodeAndSigHelper(pModule, pMethodDesc, functionToken, methodRVA, pCodeInfo);
+    *pLocalSigToken = GetILCodeAndSigHelper(pModule, functionToken, methodRVA, pCodeInfo);
 
 } // GetILCodeAndSig
 
@@ -1004,7 +1003,6 @@ void DacDbiInterfaceImpl::GetILCodeAndSig(VMPTR_DomainAssembly vmDomainAssembly,
 //
 // Arguments:
 //    pModule       - the Module containing the specified method
-//    pMD           - the specified method; can be NULL
 //    mdMethodToken - the MethodDef token of the specified method
 //    methodRVA     - the RVA of the IL for the specified method
 //    pIL           - out parameter; return the target address and size of the IL of the specified method
@@ -1014,12 +1012,17 @@ void DacDbiInterfaceImpl::GetILCodeAndSig(VMPTR_DomainAssembly vmDomainAssembly,
 //
 
 mdSignature DacDbiInterfaceImpl::GetILCodeAndSigHelper(Module *       pModule,
-                                                       MethodDesc *   pMD,
                                                        mdMethodDef    mdMethodToken,
                                                        RVA            methodRVA,
                                                        TargetBuffer * pIL)
 {
     _ASSERTE(pModule != NULL);
+
+    // If the MethodDesc is not found, that's ok as it is only used to verify assertions.
+    MethodDesc* pMD;
+    ALLOW_DATATARGET_MISSING_OR_INCONSISTENT_MEMORY(
+        pMD = FindLoadedMethodRefOrDef(pModule, mdMethodToken);
+    );
 
     // If a MethodDesc is provided, it has to be consistent with the MethodDef token and the RVA.
     _ASSERTE((pMD == NULL) || ((pMD->GetMemberDef() == mdMethodToken) && (pMD->GetRVA() == methodRVA)));

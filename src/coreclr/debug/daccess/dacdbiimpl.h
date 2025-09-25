@@ -1083,10 +1083,8 @@ private:
                        DebuggerIPCE_JITFuncData * pJITFuncData);
 
     // This is just a worker function for GetILCodeAndSig.  It returns the function's ILCode and SigToken
-    // given a module, a token, and the RVA.  If a MethodDesc is provided, it has to be consistent with
-    // the token and the RVA.
+    // given a module, a token, and the RVA.
     mdSignature GetILCodeAndSigHelper(Module *       pModule,
-                                      MethodDesc *   pMD,
                                       mdMethodDef    mdMethodToken,
                                       RVA            methodRVA,
                                       TargetBuffer * pIL);
