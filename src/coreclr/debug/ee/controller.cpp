@@ -1412,7 +1412,9 @@ bool DebuggerController::BindPatch(DebuggerControllerPatch *patch,
         _ASSERTE(startAddr != NULL);
     }
 
-    _ASSERTE(!g_pEEInterface->IsStub((const BYTE *)startAddr));
+    // The PrecodeStubManager redirects calls to the JITed Async Thunk which will be redirected by the AsyncThunkStubManager
+    // We need to bind a patch inside the async thunk which is a 'stub'.
+    _ASSERTE(!g_pEEInterface->IsStub((const BYTE *)startAddr) || pMD->IsAsyncThunkMethod());
 
     // If we've jitted, map to a native offset.
     DebuggerJitInfo *info = g_pDebugger->GetJitInfo(pMD, (const BYTE *)startAddr);
@@ -2139,10 +2141,10 @@ BOOL DebuggerController::AddILPatch(AppDomain * pAppDomain, Module *module,
                 DebuggerJitInfo *dji = it.Current();
                 _ASSERTE(dji->m_jitComplete);
 
-                // Skip async thunk methods - they have no sequence points and cannot bind IL breakpoints.
-                // The breakpoint should bind to the async variant method instead.
+                // Do not bind breakpoints to async thunks unless they were specifically
+                // filtered to that method desc.
                 MethodDesc *pMD = dji->m_nativeCodeVersion.GetMethodDesc();
-                if (pMD->IsAsyncThunkMethod())
+                if (pMethodDescFilter == NULL && pMD->IsAsyncThunkMethod())
                 {
                     LOG((LF_CORDB, LL_INFO10000, "DC::AILP: Skipping async thunk method\n"));
                     it.Next();
@@ -6150,6 +6152,20 @@ bool DebuggerStepper::TrapStep(ControllerStackInfo *info, bool in)
                     registers)), walker.GetNextIP(),walker.GetSkipIP(),
                     *(BYTE*)GetControlPC(&(info->m_activeFrame.registers))));
 
+                if (info->m_activeFrame.md != NULL && info->m_activeFrame.md->IsAsyncThunkMethod())
+                {
+                    PCODE ip = GetControlPC(&(info->m_activeFrame.registers));
+                    TraceDestination trace;
+                    if (g_pEEInterface->TraceStub((BYTE*)ip, &trace) && g_pEEInterface->FollowTrace(&trace))
+                    {
+                        LOG((LF_CORDB, LL_INFO10000, "DS::TS:WALK_UNKNOWN, found trace and attempting to patch\n"));
+                        if (PatchTrace(&trace, info->m_activeFrame.fp, false))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
                 EnableSingleStep();
 
                 return true;
@@ -6550,6 +6566,13 @@ void DebuggerStepper::TrapStepOut(ControllerStackInfo *info, bool fForceTraditio
             // to deal with the tailcall. Thus we just skip that frame here.
             LOG((LF_CORDB, LL_INFO10000,
                  "DS::TSO: CallTailCallTarget frame.\n"));
+            continue;
+        }
+        else if (info->m_activeFrame.md != nullptr && info->m_activeFrame.md->IsAsyncThunkMethod())
+        {
+            // Async thunks are not interesting frames to step out into.
+            LOG((LF_CORDB, LL_INFO10000,
+                 "DS::TSO: skipping async thunk method frame.\n"));
             continue;
         }
         else if (info->m_activeFrame.managed)
