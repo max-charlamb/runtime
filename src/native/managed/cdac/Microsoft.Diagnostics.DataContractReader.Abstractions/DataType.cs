@@ -110,6 +110,7 @@ public enum DataType
     NonVtableSlot,
     MethodImpl,
     NativeCodeSlot,
+    AsyncMethodData,
     GCCoverageInfo,
     ArrayListBase,
     ArrayListBlock,
