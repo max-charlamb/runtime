@@ -236,6 +236,7 @@ internal partial class MockDescriptors
                 new(nameof(Data.RealCodeHeader.EHInfo), DataType.pointer),
                 new(nameof(Data.RealCodeHeader.GCInfo), DataType.pointer),
                 new(nameof(Data.RealCodeHeader.NumUnwindInfos), DataType.uint32),
+                new(nameof(Data.RealCodeHeader.EHInfo), DataType.pointer),
                 new(nameof(Data.RealCodeHeader.UnwindInfos), DataType.pointer),
                 new(nameof(Data.RealCodeHeader.JitEHInfo), DataType.pointer),
             ]
@@ -516,6 +517,7 @@ internal partial class MockDescriptors
             Builder.TargetTestHelpers.Write(chf.Slice(tyInfo.Fields[nameof(Data.RealCodeHeader.NumUnwindInfos)].Offset, sizeof(uint)), 0u);
             Builder.TargetTestHelpers.WritePointer(chf.Slice(tyInfo.Fields[nameof(Data.RealCodeHeader.UnwindInfos)].Offset, Builder.TargetTestHelpers.PointerSize), TargetPointer.Null);
             Builder.TargetTestHelpers.WritePointer(chf.Slice(tyInfo.Fields[nameof(Data.RealCodeHeader.JitEHInfo)].Offset, Builder.TargetTestHelpers.PointerSize), TargetPointer.Null);
+            Builder.TargetTestHelpers.WritePointer(chf.Slice(tyInfo.Fields[nameof(Data.RealCodeHeader.EHInfo)].Offset, Builder.TargetTestHelpers.PointerSize), TargetPointer.Null);
 
             return codeStart;
         }
