@@ -147,22 +147,12 @@ internal partial class StackWalk_1 : IStackWalk
             }
         }
 
-        // if the next Frame is not valid and we are not in managed code, there is nothing to return
         if (state == StackWalkState.SW_FRAME && !frameIterator.IsValid())
         {
             yield break;
         }
 
         StackWalkData stackWalkData = new(context, state, frameIterator, threadData);
-
-        // Mirror native Init() -> ProcessCurrentFrame() -> CheckForSkippedFrames():
-        // When the initial frame is managed (SW_FRAMELESS), check if there are explicit
-        // Frames below the caller SP that should be reported first. The native walker
-        // yields skipped frames BEFORE the containing managed frame on non-x86.
-        if (state == StackWalkState.SW_FRAMELESS && CheckForSkippedFrames(stackWalkData))
-        {
-            stackWalkData.State = StackWalkState.SW_SKIPPED_FRAME;
-        }
 
         yield return stackWalkData.ToDataFrame();
         stackWalkData.AdvanceIsFirst();
@@ -176,6 +166,8 @@ internal partial class StackWalk_1 : IStackWalk
 
     IReadOnlyList<StackReferenceData> IStackWalk.WalkStackReferences(ThreadData threadData)
     {
+        // TODO(stackref): This isn't quite right. We need to check if the FilterContext or ProfilerFilterContext
+        // is set and prefer that if either is not null.
         IEnumerable<IStackDataFrameHandle> stackFrames = CreateStackWalkCore(threadData, skipInitialFrames: true);
         IEnumerable<StackDataFrameHandle> frames = stackFrames.Select(AssertCorrectHandle);
         IEnumerable<GCFrameData> gcFrames = Filter(frames);
@@ -189,6 +181,7 @@ internal partial class StackWalk_1 : IStackWalk
                 _ = ((IStackWalk)this).GetMethodDescPtr(gcFrame.Frame);
 
                 bool reportGcReferences = gcFrame.ShouldCrawlFrameReportGCReferences;
+
 
                 TargetPointer pFrame = ((IStackWalk)this).GetFrameAddress(gcFrame.Frame);
                 scanContext.UpdateScanContext(
@@ -210,27 +203,30 @@ internal partial class StackWalk_1 : IStackWalk
                         if (gcFrame.ShouldParentToFuncletSkipReportingGCReferences)
                             codeManagerFlags |= CodeManagerFlags.ParentOfFuncletStackFrame;
 
-                        // TODO: When ShouldParentFrameUseUnwindTargetPCforGCReporting is set,
-                        // use FindFirstInterruptiblePoint on the catch handler clause range
-                        // to override the relOffset for GC liveness lookup. This mirrors
-                        // native gcenv.ee.common.cpp behavior for catch-handler resumption.
+                        uint? relOffsetOverride = null;
+                        if (gcFrame.ShouldParentFrameUseUnwindTargetPCforGCReporting)
+                        {
+                            _eman.GetGCInfo(cbh.Value, out TargetPointer gcInfoAddr, out uint gcVersion);
+                            IGCInfoHandle gcHandle = _target.Contracts.GCInfo.DecodePlatformSpecificGCInfo(gcInfoAddr, gcVersion);
+                            if (gcHandle is IGCInfoDecoder decoder)
+                            {
+                                relOffsetOverride = decoder.FindFirstInterruptiblePoint(
+                                    gcFrame.ClauseForCatchHandlerStartPC,
+                                    gcFrame.ClauseForCatchHandlerEndPC);
+                            }
+                        }
 
                         GcScanner gcScanner = new(_target);
-                        gcScanner.EnumGcRefs(gcFrame.Frame.Context, cbh.Value, codeManagerFlags, scanContext);
+                        gcScanner.EnumGcRefs(gcFrame.Frame.Context, cbh.Value, codeManagerFlags, scanContext, relOffsetOverride);
                     }
                     else
                     {
-                        // TODO: Frame-based GC root scanning (ScanFrameRoots) not yet implemented.
-                        // Frames that call PromoteCallerStack (StubDispatchFrame, ExternalMethodFrame,
-                        // DynamicHelperFrame, etc.) will be handled in a follow-up PR.
+                        ScanFrameRoots(gcFrame.Frame, scanContext);
                     }
                 }
             }
             catch (System.Exception ex)
             {
-                // Per-frame exceptions are intentionally swallowed to provide partial results
-                // rather than failing the entire stack walk. This matches the resilience model
-                // of the legacy DAC. Callers can detect incomplete results by comparing counts.
                 Debug.WriteLine($"Exception during WalkStackReferences at IP=0x{gcFrame.Frame.Context.InstructionPointer:X}: {ex.GetType().Name}: {ex.Message}");
             }
         }
@@ -260,6 +256,8 @@ internal partial class StackWalk_1 : IStackWalk
         public bool ShouldParentToFuncletSkipReportingGCReferences { get; set; }
         public bool ShouldCrawlFrameReportGCReferences { get; set; } // required
         public bool ShouldParentFrameUseUnwindTargetPCforGCReporting { get; set; }
+        public uint ClauseForCatchHandlerStartPC { get; set; }
+        public uint ClauseForCatchHandlerEndPC { get; set; }
     }
 
     private IEnumerable<GCFrameData> Filter(IEnumerable<StackDataFrameHandle> handles)
@@ -267,6 +265,7 @@ internal partial class StackWalk_1 : IStackWalk
         // StackFrameIterator::Filter assuming GC_FUNCLET_REFERENCE_REPORTING is defined
 
         // global tracking variables
+        bool movedPastFirstExInfo = false;
         bool processNonFilterFunclet = false;
         bool processIntermediaryNonFilterFunclet = false;
         bool didFuncletReportGCReferences = true;
@@ -285,6 +284,15 @@ internal partial class StackWalk_1 : IStackWalk
             bool skipFuncletCallback = true;
 
             TargetPointer pExInfo = GetCurrentExceptionTracker(handle);
+
+            TargetPointer frameSp = handle.State == StackWalkState.SW_FRAME ? handle.FrameAddress : handle.Context.StackPointer;
+            if (pExInfo != TargetPointer.Null && frameSp > pExInfo)
+            {
+                if (!movedPastFirstExInfo)
+                {
+                    movedPastFirstExInfo = true;
+                }
+            }
 
             // by default, there is no funclet for the current frame
             // that reported GC references
@@ -494,6 +502,9 @@ internal partial class StackWalk_1 : IStackWalk
                                                 didFuncletReportGCReferences = true;
 
                                                 gcFrame.ShouldParentFrameUseUnwindTargetPCforGCReporting = true;
+
+                                                gcFrame.ClauseForCatchHandlerStartPC = exInfo.ClauseForCatchHandlerStartPC;
+                                                gcFrame.ClauseForCatchHandlerEndPC = exInfo.ClauseForCatchHandlerEndPC;
                                             }
                                             else if (!IsFunclet(handle))
                                             {
@@ -597,7 +608,18 @@ internal partial class StackWalk_1 : IStackWalk
                 }
                 break;
             case StackWalkState.SW_SKIPPED_FRAME:
+                // Native SFITER_SKIPPED_FRAME_FUNCTION: advance past the frame, then
+                // check for MORE skipped frames before transitioning to FRAMELESS.
+                // This prevents yielding the managed method multiple times between
+                // consecutive skipped frames.
                 handle.FrameIter.Next();
+                if (CheckForSkippedFrames(handle))
+                {
+                    // More skipped frames — stay in SW_SKIPPED_FRAME, don't go through UpdateState
+                    handle.State = StackWalkState.SW_SKIPPED_FRAME;
+                    return true;
+                }
+                // No more skipped frames — fall through to UpdateState which will set SW_FRAMELESS
                 break;
             case StackWalkState.SW_FRAME:
                 handle.FrameIter.UpdateContextFromFrame(handle.Context);
@@ -795,5 +817,330 @@ internal partial class StackWalk_1 : IStackWalk
         }
 
         return handle;
+    }
+
+    /// <summary>
+    /// Scans GC roots for a non-frameless (capital "F" Frame) stack frame.
+    /// Dispatches based on frame type identifier. Most frame types have a no-op
+    /// GcScanRoots (the base Frame implementation does nothing).
+    ///
+    /// Frame types with meaningful GcScanRoots that call PromoteCallerStack:
+    /// StubDispatchFrame, ExternalMethodFrame, CallCountingHelperFrame,
+    /// DynamicHelperFrame, CLRToCOMMethodFrame, HijackFrame, ProtectValueClassFrame.
+    /// </summary>
+    private void ScanFrameRoots(StackDataFrameHandle frame, GcScanContext scanContext)
+    {
+        TargetPointer frameAddress = frame.FrameAddress;
+        if (frameAddress == TargetPointer.Null)
+            return;
+
+        // Read the frame's VTable pointer (Identifier) to determine its type.
+        // GetFrameName expects a VTable identifier, not a frame address.
+        Data.Frame frameData = _target.ProcessedData.GetOrAdd<Data.Frame>(frameAddress);
+        string frameName = ((IStackWalk)this).GetFrameName(frameData.Identifier);
+
+        switch (frameName)
+        {
+            case "StubDispatchFrame":
+            {
+                Data.FramedMethodFrame fmf = _target.ProcessedData.GetOrAdd<Data.FramedMethodFrame>(frameAddress);
+                Data.StubDispatchFrame sdf = _target.ProcessedData.GetOrAdd<Data.StubDispatchFrame>(frameAddress);
+                if (sdf.GCRefMap != TargetPointer.Null)
+                {
+                    PromoteCallerStackUsingGCRefMap(fmf.TransitionBlockPtr, sdf.GCRefMap, scanContext);
+                }
+                else
+                {
+                    PromoteCallerStackUsingMetaSig(frameAddress, fmf.TransitionBlockPtr, scanContext);
+                }
+                break;
+            }
+
+            case "ExternalMethodFrame":
+            {
+                Data.FramedMethodFrame fmf = _target.ProcessedData.GetOrAdd<Data.FramedMethodFrame>(frameAddress);
+                Data.ExternalMethodFrame emf = _target.ProcessedData.GetOrAdd<Data.ExternalMethodFrame>(frameAddress);
+                if (emf.GCRefMap != TargetPointer.Null)
+                {
+                    PromoteCallerStackUsingGCRefMap(fmf.TransitionBlockPtr, emf.GCRefMap, scanContext);
+                }
+                break;
+            }
+
+            case "DynamicHelperFrame":
+            {
+                Data.FramedMethodFrame fmf = _target.ProcessedData.GetOrAdd<Data.FramedMethodFrame>(frameAddress);
+                Data.DynamicHelperFrame dhf = _target.ProcessedData.GetOrAdd<Data.DynamicHelperFrame>(frameAddress);
+                ScanDynamicHelperFrame(fmf.TransitionBlockPtr, dhf.DynamicHelperFrameFlags, scanContext);
+                break;
+            }
+
+            case "CallCountingHelperFrame":
+            case "PrestubMethodFrame":
+            {
+                Data.FramedMethodFrame fmf = _target.ProcessedData.GetOrAdd<Data.FramedMethodFrame>(frameAddress);
+                PromoteCallerStackUsingMetaSig(frameAddress, fmf.TransitionBlockPtr, scanContext);
+                break;
+            }
+
+            case "CLRToCOMMethodFrame":
+            case "ComPrestubMethodFrame":
+                // These frames call PromoteCallerStack to report method arguments.
+                // TODO(stackref): Implement PromoteCallerStack for COM interop frames
+                break;
+
+            case "HijackFrame":
+                // Reports return value registers (X86 only with FEATURE_HIJACK)
+                // TODO(stackref): Implement HijackFrame scanning
+                break;
+
+            case "ProtectValueClassFrame":
+                // Scans value types in linked list
+                // TODO(stackref): Implement ProtectValueClassFrame scanning
+                break;
+
+            default:
+                // Base Frame::GcScanRoots_Impl is a no-op — nothing to report.
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Decodes a GCRefMap bitstream and reports GC references in the transition block.
+    /// Port of native TransitionFrame::PromoteCallerStackUsingGCRefMap (frames.cpp).
+    /// </summary>
+    private void PromoteCallerStackUsingGCRefMap(
+        TargetPointer transitionBlock,
+        TargetPointer gcRefMapBlob,
+        GcScanContext scanContext)
+    {
+        GCRefMapDecoder decoder = new(_target, gcRefMapBlob);
+
+        // x86: skip stack pop count
+        if (_target.PointerSize == 4)
+            decoder.ReadStackPop();
+
+        while (!decoder.AtEnd)
+        {
+            int pos = decoder.CurrentPos;
+            GCRefMapToken token = decoder.ReadToken();
+            uint offset = OffsetFromGCRefMapPos(pos);
+            TargetPointer slotAddress = new(transitionBlock.Value + offset);
+
+            switch (token)
+            {
+                case GCRefMapToken.Skip:
+                    break;
+
+                case GCRefMapToken.Ref:
+                    scanContext.GCReportCallback(slotAddress, GcScanFlags.None);
+                    break;
+
+                case GCRefMapToken.Interior:
+                    scanContext.GCReportCallback(slotAddress, GcScanFlags.GC_CALL_INTERIOR);
+                    break;
+
+                case GCRefMapToken.MethodParam:
+                case GCRefMapToken.TypeParam:
+                    // The DAC skips these (guarded by #ifndef DACCESS_COMPILE in native).
+                    // They represent loader allocator references, not managed GC refs.
+                    break;
+
+                case GCRefMapToken.VASigCookie:
+                    // VASigCookie requires MetaSig parsing — not yet implemented.
+                    // TODO(stackref): Implement VASIG_COOKIE handling
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Converts a GCRefMap position to a byte offset within the transition block.
+    /// Port of native OffsetFromGCRefMapPos (frames.cpp:1624-1633).
+    /// </summary>
+    private uint OffsetFromGCRefMapPos(int pos)
+    {
+        uint firstSlotOffset = _target.ReadGlobal<uint>(Constants.Globals.TransitionBlockOffsetOfFirstGCRefMapSlot);
+
+        return firstSlotOffset + (uint)(pos * _target.PointerSize);
+    }
+
+    /// <summary>
+    /// Scans GC roots for a DynamicHelperFrame based on its flags.
+    /// Port of native DynamicHelperFrame::GcScanRoots_Impl (frames.cpp:1071-1105).
+    /// </summary>
+    private void ScanDynamicHelperFrame(
+        TargetPointer transitionBlock,
+        int dynamicHelperFrameFlags,
+        GcScanContext scanContext)
+    {
+        const int DynamicHelperFrameFlags_ObjectArg = 1;
+        const int DynamicHelperFrameFlags_ObjectArg2 = 2;
+
+        uint argRegOffset = _target.ReadGlobal<uint>(Constants.Globals.TransitionBlockOffsetOfArgumentRegisters);
+
+        if ((dynamicHelperFrameFlags & DynamicHelperFrameFlags_ObjectArg) != 0)
+        {
+            TargetPointer argAddr = new(transitionBlock.Value + argRegOffset);
+            // On x86, this would need offsetof(ArgumentRegisters, ECX) adjustment.
+            // For AMD64/ARM64, the first argument register is at the base offset.
+            scanContext.GCReportCallback(argAddr, GcScanFlags.None);
+        }
+
+        if ((dynamicHelperFrameFlags & DynamicHelperFrameFlags_ObjectArg2) != 0)
+        {
+            TargetPointer argAddr = new(transitionBlock.Value + argRegOffset + (uint)_target.PointerSize);
+            // On x86, this would need offsetof(ArgumentRegisters, EDX) adjustment.
+            // For AMD64/ARM64, the second argument is pointer-size after the first.
+            scanContext.GCReportCallback(argAddr, GcScanFlags.None);
+        }
+    }
+
+    /// <summary>
+    /// Promotes caller stack GC references by parsing the method signature via MetaSig.
+    /// Used when a frame has no precomputed GCRefMap (e.g., dynamic/LCG methods).
+    /// Port of native TransitionFrame::PromoteCallerStack + PromoteCallerStackHelper (frames.cpp).
+    /// </summary>
+    private void PromoteCallerStackUsingMetaSig(
+        TargetPointer frameAddress,
+        TargetPointer transitionBlock,
+        GcScanContext scanContext)
+    {
+        Data.FramedMethodFrame fmf = _target.ProcessedData.GetOrAdd<Data.FramedMethodFrame>(frameAddress);
+        TargetPointer methodDescPtr = fmf.MethodDescPtr;
+        if (methodDescPtr == TargetPointer.Null)
+            return;
+
+        ReadOnlySpan<byte> signature;
+        try
+        {
+            signature = GetMethodSignatureBytes(methodDescPtr);
+        }
+        catch (System.Exception)
+        {
+            return;
+        }
+
+        if (signature.IsEmpty)
+            return;
+
+        CorSigParser parser = new(signature, _target.PointerSize);
+
+        // Parse calling convention
+        byte callingConvByte = parser.ReadByte();
+        bool hasThis = (callingConvByte & 0x20) != 0; // IMAGE_CEE_CS_CALLCONV_HASTHIS
+        bool isGeneric = (callingConvByte & 0x10) != 0;
+
+        if (isGeneric)
+            parser.ReadCompressedUInt(); // skip generic param count
+
+        uint paramCount = parser.ReadCompressedUInt();
+
+        // Skip return type
+        parser.SkipType();
+
+        // Walk through GCRefMap positions.
+        // The position numbering matches how GCRefMap encodes slots:
+        //   ARM64: pos 0 = RetBuf (x8), pos 1+ = argument registers (x0-x7), then stack
+        //   Others: pos 0 = first argument register/slot, etc.
+        int pos = 0;
+
+        // On ARM64, position 0 is the return buffer register (x8).
+        // Methods without a return buffer skip this slot.
+        // TODO: detect HasRetBuf from the signature's return type when needed.
+        // For now, we skip the retbuf slot on ARM64 since the common case
+        // (dynamic invoke stubs) doesn't use return buffers.
+        bool isArm64 = IsTargetArm64();
+        if (isArm64)
+            pos++;
+
+        // Promote 'this' if present
+        if (hasThis)
+        {
+            uint offset = OffsetFromGCRefMapPos(pos);
+            TargetPointer slotAddress = new(transitionBlock.Value + offset);
+            scanContext.GCReportCallback(slotAddress, GcScanFlags.None);
+            pos++;
+        }
+
+        // Walk each parameter
+        for (uint i = 0; i < paramCount; i++)
+        {
+            uint offset = OffsetFromGCRefMapPos(pos);
+            TargetPointer slotAddress = new(transitionBlock.Value + offset);
+
+            GcTypeKind kind = parser.ReadTypeAndClassify();
+
+            switch (kind)
+            {
+                case GcTypeKind.Ref:
+                    scanContext.GCReportCallback(slotAddress, GcScanFlags.None);
+                    break;
+
+                case GcTypeKind.Interior:
+                    scanContext.GCReportCallback(slotAddress, GcScanFlags.GC_CALL_INTERIOR);
+                    break;
+
+                case GcTypeKind.Other:
+                    // Value types may contain embedded GC references.
+                    // Full scanning requires reading the MethodTable's GCDesc.
+                    // TODO(stackref): Implement value type GCDesc scanning for MetaSig path.
+                    break;
+
+                case GcTypeKind.None:
+                    break;
+            }
+
+            pos++;
+        }
+    }
+
+    /// <summary>
+    /// Gets the raw signature bytes for a MethodDesc.
+    /// For StoredSigMethodDesc (dynamic, array, EEImpl methods), reads the embedded signature.
+    /// For normal IL methods, reads from module metadata.
+    /// </summary>
+    private ReadOnlySpan<byte> GetMethodSignatureBytes(TargetPointer methodDescPtr)
+    {
+        IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
+        MethodDescHandle mdh = rts.GetMethodDescHandle(methodDescPtr);
+
+        // Try StoredSigMethodDesc first (dynamic/LCG/array methods)
+        if (rts.IsStoredSigMethodDesc(mdh, out ReadOnlySpan<byte> storedSig))
+            return storedSig;
+
+        // Normal IL methods: get signature from metadata
+        uint methodToken = rts.GetMethodToken(mdh);
+        if (methodToken == 0x06000000) // mdtMethodDef with RID 0 = no token
+            return default;
+
+        TargetPointer methodTablePtr = rts.GetMethodTable(mdh);
+        TypeHandle typeHandle = rts.GetTypeHandle(methodTablePtr);
+        TargetPointer modulePtr = rts.GetModule(typeHandle);
+
+        ILoader loader = _target.Contracts.Loader;
+        ModuleHandle moduleHandle = loader.GetModuleHandleFromModulePtr(modulePtr);
+
+        IEcmaMetadata ecmaMetadata = _target.Contracts.EcmaMetadata;
+        MetadataReader? mdReader = ecmaMetadata.GetMetadata(moduleHandle);
+        if (mdReader is null)
+            return default;
+
+        MethodDefinitionHandle methodDefHandle = MetadataTokens.MethodDefinitionHandle((int)(methodToken & 0x00FFFFFF));
+        MethodDefinition methodDef = mdReader.GetMethodDefinition(methodDefHandle);
+        BlobReader blobReader = mdReader.GetBlobReader(methodDef.Signature);
+        return blobReader.ReadBytes(blobReader.Length);
+    }
+
+    /// <summary>
+    /// Detects if the target architecture is ARM64 based on TransitionBlock layout.
+    /// On ARM64, GetOffsetOfFirstGCRefMapSlot != GetOffsetOfArgumentRegisters
+    /// (because the first GCRefMap slot is the x8 RetBuf register, not x0).
+    /// </summary>
+    private bool IsTargetArm64()
+    {
+        uint firstGCRefMapSlot = _target.ReadGlobal<uint>(Constants.Globals.TransitionBlockOffsetOfFirstGCRefMapSlot);
+        uint argRegsOffset = _target.ReadGlobal<uint>(Constants.Globals.TransitionBlockOffsetOfArgumentRegisters);
+        return firstGCRefMapSlot != argRegsOffset;
     }
 }

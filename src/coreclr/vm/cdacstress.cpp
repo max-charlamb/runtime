@@ -16,7 +16,7 @@
 
 #ifdef HAVE_GCCOVER
 
-#include "cdacstress.h"
+#include "CdacStress.h"
 #include "../../native/managed/cdac/inc/cdac_reader.h"
 #include "../../debug/datadescriptor-shared/inc/contract-descriptor.h"
 #include <xclrdata.h>
@@ -72,7 +72,7 @@ static CrstStatic       s_cdacLock;       // Serializes cDAC access from concurr
 
 // Unique-stack filtering: hash set of previously seen stack traces.
 // Protected by s_cdacLock (already held during VerifyAtStressPoint).
-
+static const int UNIQUE_STACK_DEPTH = 8; // Number of return addresses to hash
 static SHash<NoRemoveSHashTraits<SetSHashTraits<SIZE_T>>>* s_seenStacks = nullptr;
 
 // Thread-local reentrancy guard — prevents infinite recursion when
@@ -146,24 +146,17 @@ static int ReadThreadContextCallback(uint32_t threadId, uint32_t contextFlags, u
 // Minimal ICLRDataTarget implementation for loading the legacy DAC in-process.
 // Routes ReadVirtual/GetThreadContext to the same callbacks as the cDAC.
 //-----------------------------------------------------------------------------
-class InProcessDataTarget : public ICLRDataTarget, public ICLRRuntimeLocator
+class InProcessDataTarget : public ICLRDataTarget
 {
     volatile LONG m_refCount;
 public:
     InProcessDataTarget() : m_refCount(1) {}
-    virtual ~InProcessDataTarget() = default;
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppObj) override
     {
         if (riid == IID_IUnknown || riid == __uuidof(ICLRDataTarget))
         {
             *ppObj = static_cast<ICLRDataTarget*>(this);
-            AddRef();
-            return S_OK;
-        }
-        if (riid == __uuidof(ICLRRuntimeLocator))
-        {
-            *ppObj = static_cast<ICLRRuntimeLocator*>(this);
             AddRef();
             return S_OK;
         }
@@ -176,14 +169,6 @@ public:
         ULONG c = InterlockedDecrement(&m_refCount);
         if (c == 0) delete this;
         return c;
-    }
-
-    // ICLRRuntimeLocator — provides the CLR base address directly so the DAC
-    // does not fall back to GetImageBase (which needs GetModuleHandleW, unavailable on Linux).
-    HRESULT STDMETHODCALLTYPE GetRuntimeBase(CLRDATA_ADDRESS* baseAddress) override
-    {
-        *baseAddress = (CLRDATA_ADDRESS)GetCurrentModuleBase();
-        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetMachineType(ULONG32* machineType) override
@@ -208,8 +193,10 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetImageBase(LPCWSTR imagePath, CLRDATA_ADDRESS* baseAddress) override
     {
-        // Not needed — the DAC uses ICLRRuntimeLocator::GetRuntimeBase() instead.
-        return E_NOTIMPL;
+        HMODULE hMod = ::GetModuleHandleW(imagePath);
+        if (hMod == NULL) return E_FAIL;
+        *baseAddress = (CLRDATA_ADDRESS)hMod;
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE ReadVirtual(CLRDATA_ADDRESS address, BYTE* buffer, ULONG32 bytesRequested, ULONG32* bytesRead) override
@@ -282,8 +269,8 @@ bool CdacStress::Initialize()
     }
     else
     {
-        // Legacy: GCSTRESS_CDAC maps to allocation-point + reference verification
-        s_cdacStressLevel = CDACSTRESS_ALLOC | CDACSTRESS_REFS;
+        // Legacy: GCSTRESS_CDAC maps to allocation-point verification
+        s_cdacStressLevel = CDACSTRESS_ALLOC;
     }
 
     // Load mscordaccore_universal from next to coreclr
@@ -876,11 +863,10 @@ static void CompareStackWalks(Thread* pThread, PCONTEXT regs)
 
             if (cdacIP != dacIP || cdacSP != dacSP)
             {
-                if (s_logFile)
-                    fprintf(s_logFile, "  [WALK_MISMATCH] Frame %d: Context differs cDAC_IP=0x%llx cDAC_SP=0x%llx DAC_IP=0x%llx DAC_SP=0x%llx\n",
-                        frameIdx,
-                        (unsigned long long)cdacIP, (unsigned long long)cdacSP,
-                        (unsigned long long)dacIP, (unsigned long long)dacSP);
+                fprintf(s_logFile, "  [WALK_MISMATCH] Frame %d: Context differs cDAC_IP=0x%llx cDAC_SP=0x%llx DAC_IP=0x%llx DAC_SP=0x%llx\n",
+                    frameIdx,
+                    (unsigned long long)cdacIP, (unsigned long long)cdacSP,
+                    (unsigned long long)dacIP, (unsigned long long)dacSP);
                 mismatch = true;
             }
         }
@@ -945,8 +931,6 @@ static bool CompareRefSets(StackRef* refsA, int countA, StackRef* refsB, int cou
         return false;
     if (countA == 0)
         return true;
-    if (countA > MAX_COLLECTED_REFS)
-        return false;
 
     bool matched[MAX_COLLECTED_REFS] = {};
 
@@ -1025,6 +1009,9 @@ void CdacStress::VerifyAtAllocPoint()
     // Reentrancy guard: allocations inside VerifyAtStressPoint (e.g., SArray)
     // would trigger this function again, causing deadlock on s_cdacLock.
     if (t_inVerification)
+        return;
+
+    if (ShouldSkipStressPoint())
         return;
 
     Thread* pThread = GetThreadNULLOk();
@@ -1112,20 +1099,14 @@ void CdacStress::VerifyAtStressPoint(Thread* pThread, PCONTEXT regs)
 
     StackRef runtimeRefsBuf[MAX_COLLECTED_REFS];
     int runtimeCount = 0;
-    bool haveRuntime = CollectRuntimeStackRefs(pThread, regs, runtimeRefsBuf, &runtimeCount);
+    CollectRuntimeStackRefs(pThread, regs, runtimeRefsBuf, &runtimeCount);
 
-    if (!haveCdac || !haveRuntime)
+    if (!haveCdac)
     {
         InterlockedIncrement(&s_verifySkip);
         if (s_logFile != nullptr)
-        {
-            if (!haveCdac)
-                fprintf(s_logFile, "[SKIP] Thread=0x%x IP=0x%p - cDAC GetStackReferences failed\n",
-                    osThreadId, (void*)GetIP(regs));
-            else
-                fprintf(s_logFile, "[SKIP] Thread=0x%x IP=0x%p - runtime CollectRuntimeStackRefs overflowed\n",
-                    osThreadId, (void*)GetIP(regs));
-        }
+            fprintf(s_logFile, "[SKIP] Thread=0x%x IP=0x%p - cDAC GetStackReferences failed\n",
+                osThreadId, (void*)GetIP(regs));
         return;
     }
 

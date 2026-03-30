@@ -236,6 +236,7 @@ internal partial class MockDescriptors
                 new(nameof(Data.RealCodeHeader.EHInfo), DataType.pointer),
                 new(nameof(Data.RealCodeHeader.GCInfo), DataType.pointer),
                 new(nameof(Data.RealCodeHeader.NumUnwindInfos), DataType.uint32),
+                new(nameof(Data.RealCodeHeader.EHInfo), DataType.pointer),
                 new(nameof(Data.RealCodeHeader.UnwindInfos), DataType.pointer),
             ]
         };
