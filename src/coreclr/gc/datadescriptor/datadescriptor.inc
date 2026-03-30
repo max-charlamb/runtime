@@ -113,14 +113,14 @@ CDAC_TYPE_END(TableSegment)
 
 CDAC_TYPE_BEGIN(CardTableInfo)
 CDAC_TYPE_SIZE(sizeof(dac_card_table_info))
-CDAC_TYPE_FIELD(CardTableInfo, /*uint32*/, Recount, offsetof(dac_card_table_info, recount))
-CDAC_TYPE_FIELD(CardTableInfo, /*nuint*/, Size, offsetof(dac_card_table_info, size))
-CDAC_TYPE_FIELD(CardTableInfo, /*pointer*/, NextCardTable, offsetof(dac_card_table_info, next_card_table))
+CDAC_TYPE_FIELD(CardTableInfo, T_UINT32, Recount, offsetof(dac_card_table_info, recount))
+CDAC_TYPE_FIELD(CardTableInfo, T_NUINT, Size, offsetof(dac_card_table_info, size))
+CDAC_TYPE_FIELD(CardTableInfo, T_POINTER, NextCardTable, offsetof(dac_card_table_info, next_card_table))
 CDAC_TYPE_END(CardTableInfo)
 
 CDAC_TYPE_BEGIN(RegionFreeList)
 CDAC_TYPE_SIZE(sizeof(dac_region_free_list))
-CDAC_TYPE_FIELD(RegionFreeList, /*pointer*/, HeadFreeRegion, offsetof(dac_region_free_list, head_free_region))
+CDAC_TYPE_FIELD(RegionFreeList, T_POINTER, HeadFreeRegion, offsetof(dac_region_free_list, head_free_region))
 CDAC_TYPE_END(RegionFreeList)
 
 CDAC_TYPES_END()
