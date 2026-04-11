@@ -614,7 +614,30 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
     }
 
     int IXCLRDataProcess.Request(uint reqCode, uint inBufferSize, byte* inBuffer, uint outBufferSize, byte* outBuffer)
-        => _legacyProcess is not null ? _legacyProcess.Request(reqCode, inBufferSize, inBuffer, outBufferSize, outBuffer) : HResults.E_NOTIMPL;
+    {
+        int hr = HResults.S_OK;
+        try
+        {
+            switch (reqCode)
+            {
+                case (uint)CLRDataGeneralRequest.CLRDATA_REQUEST_REVISION:
+                    if (inBufferSize != 0 || inBuffer is not null || outBufferSize != sizeof(uint) || outBuffer is null)
+                        return HResults.E_INVALIDARG;
+                    *(uint*)outBuffer = 9;
+                    break;
+
+                default:
+                    if (_legacyProcess is not null)
+                        return _legacyProcess.Request(reqCode, inBufferSize, inBuffer, outBufferSize, outBuffer);
+                    return HResults.E_INVALIDARG;
+            }
+        }
+        catch (System.Exception ex)
+        {
+            hr = ex.HResult;
+        }
+        return hr;
+    }
 
     int IXCLRDataProcess.CreateMemoryValue(
         IXCLRDataAppDomain? appDomain,
