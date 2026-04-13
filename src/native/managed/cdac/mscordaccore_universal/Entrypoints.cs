@@ -81,12 +81,6 @@ internal static class Entrypoints
             ? cw.GetOrCreateObjectForComInstance(legacyImplPtr, CreateObjectFlags.None)
             : null;
 
-        // When CDAC_NO_FALLBACK is set, don't pass the legacy DAC to SOSDacImpl.
-        // This runs the cDAC standalone without any legacy delegation, exposing
-        // any APIs that haven't been implemented yet.
-        if (Environment.GetEnvironmentVariable("CDAC_NO_FALLBACK") == "1")
-            legacyImpl = null;
-
         Legacy.SOSDacImpl impl = new(target, legacyImpl);
         nint ptr = cw.GetOrCreateComInterfaceForObject(impl, CreateComInterfaceFlags.None);
         *obj = ptr;

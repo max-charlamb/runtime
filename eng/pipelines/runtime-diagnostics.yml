@@ -153,8 +153,8 @@ extends:
           variables:
             - name: AllowPtrToDetectTestRunRetryFiles
               value: false
-            - name: CDAC_NO_FALLBACK
-              value: '1'
+            - name: DOTNET_ENABLE_CDAC
+              value: '2'
           jobParameters:
             name: cDAC_no_fallback
             useCdac: true

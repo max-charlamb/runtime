@@ -287,49 +287,44 @@ DacDbiInterfaceInstance(
     }
 
 #ifdef CAN_USE_CDAC
-    CLRConfigNoCache enable = CLRConfigNoCache::Get("ENABLE_CDAC");
-    if (enable.IsSet())
+    bool fallback;
+    HRESULT cdacHr = pDac->TryEnableCDAC(fallback);
+    if (cdacHr == S_OK)
     {
-        DWORD val;
-        if (enable.TryAsInteger(10, val) && val == 1)
+        ReleaseHolder<IUnknown> cdacInterface = nullptr;
+        pDac->m_cdac.CreateDacDbiInterface(&cdacInterface);
+        if (cdacInterface != nullptr)
         {
-            uint64_t contractDescriptorAddr = 0;
-            if (TryGetSymbol(pDac->m_pTarget, pDac->m_globalBase, "DotNetRuntimeContractDescriptor", &contractDescriptorAddr))
+            IDacDbiInterface* pCDacDbi = nullptr;
+            HRESULT hr = cdacInterface->QueryInterface(__uuidof(IDacDbiInterface), (void**)&pCDacDbi);
+            if (SUCCEEDED(hr))
             {
-                IUnknown* legacyImpl;
-                HRESULT qiRes = pDac->QueryInterface(IID_IUnknown, (void**)&legacyImpl);
-                _ASSERTE(SUCCEEDED(qiRes));
-
-                CDAC& cdac = pDac->m_cdac;
-                cdac = CDAC::Create(contractDescriptorAddr, pDac->m_pTarget, legacyImpl);
-                if (cdac.IsValid())
+                if (fallback)
                 {
-                    ReleaseHolder<IUnknown> cdacInterface = nullptr;
-                    cdac.CreateDacDbiInterface(&cdacInterface);
-                    if (cdacInterface != nullptr)
-                    {
-                        IDacDbiInterface* pCDacDbi = nullptr;
-                        HRESULT hr = cdacInterface->QueryInterface(__uuidof(IDacDbiInterface), (void**)&pCDacDbi);
-                        if (SUCCEEDED(hr))
-                        {
-                            // Lifetime is now managed by cDAC implementation
-                            pDac->Release();
-                            // Release the AddRef from the QI for legacyImpl
-                            pDac->Release();
-                            *ppInterface = pCDacDbi;
-                            return S_OK;
-                        }
-                    }
+                    // Lifetime is now managed by cDAC implementation
+                    pDac->Release();
+                    // Release the AddRef from the QI for legacyImpl
+                    pDac->Release();
                 }
-
-                // Release the AddRef from the QI for legacyImpl
-                pDac->Release();
+                // Without fallback, pDac stays alive at ref=1 (owns m_cdac
+                // and DataTargetAdapter for the debugging session).
+                *ppInterface = pCDacDbi;
+                return S_OK;
             }
-
-            // If we requested to use the cDAC, but failed to create the cDAC interface, return failure
-            pDac->Release();
-            return E_FAIL;
         }
+
+        if (fallback)
+        {
+            // Release the AddRef from the QI for legacyImpl
+            pDac->Release();
+        }
+    }
+
+    if (cdacHr != S_FALSE)
+    {
+        // cDAC was requested but interface creation failed
+        pDac->Release();
+        return E_FAIL;
     }
 #endif
 

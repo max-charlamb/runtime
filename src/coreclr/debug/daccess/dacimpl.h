@@ -1388,6 +1388,14 @@ public:
     // TODO: [cdac] Remove when cDAC deploys with SOS - https://github.com/dotnet/runtime/issues/108720
     CDAC m_cdac;
 
+    // Reads DOTNET_ENABLE_CDAC and initializes m_cdac if the cDAC is enabled.
+    // Returns:
+    //   S_OK    - m_cdac is valid. When fallback is true, caller holds a QI AddRef
+    //             that must be Released after creating the interface.
+    //   S_FALSE - cDAC is not enabled. Caller should use the legacy path.
+    //   E_FAIL  - cDAC was requested but initialization failed.
+    HRESULT TryEnableCDAC(bool& fallback);
+
 #ifdef FEATURE_MINIMETADATA_IN_TRIAGEDUMPS
 
 protected:

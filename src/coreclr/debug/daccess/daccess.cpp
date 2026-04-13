@@ -6600,6 +6600,73 @@ STDAPI CLRDataAccessCreateInstance(ICLRDataTarget * pLegacyTarget,
 
 //----------------------------------------------------------------------------
 //
+// ClrDataAccess::TryEnableCDAC
+//
+// Reads DOTNET_ENABLE_CDAC and initializes m_cdac if enabled.
+//
+// DOTNET_ENABLE_CDAC flags:
+//   0x1 - enable cDAC with legacy DAC fallback
+//   0x2 - enable cDAC without legacy DAC fallback (standalone mode)
+//
+// Returns:
+//   S_OK    - m_cdac is valid and ready for interface creation.
+//             When fallback is true, the caller holds a QI AddRef that must
+//             be Released (once for the QI, once for lifetime transfer on success).
+//   S_FALSE - cDAC is not enabled. Caller should use the legacy path.
+//   E_FAIL  - cDAC was requested but initialization failed.
+//
+//----------------------------------------------------------------------------
+HRESULT ClrDataAccess::TryEnableCDAC(bool& fallback)
+{
+    fallback = true;
+
+    if (m_cdac.IsValid())
+    {
+        _ASSERTE(!"TryEnableCDAC called when cDAC is already initialized");
+        return E_UNEXPECTED;
+    }
+
+#ifndef CAN_USE_CDAC
+    return S_FALSE;
+#else
+    CLRConfigNoCache enable = CLRConfigNoCache::Get("ENABLE_CDAC");
+    if (!enable.IsSet())
+        return S_FALSE;
+
+    DWORD val;
+    if (!enable.TryAsInteger(10, val) || val == 0)
+        return S_FALSE;
+
+    fallback = (val & 0x2) == 0;
+
+    // TODO: [cdac] TryGetSymbol is only implemented for Linux, OSX, and Windows.
+    uint64_t contractDescriptorAddr = 0;
+    if (!TryGetSymbol(m_pTarget, m_globalBase, "DotNetRuntimeContractDescriptor", &contractDescriptorAddr))
+        return E_FAIL;
+
+    IUnknown* legacyImpl = nullptr;
+    if (fallback)
+    {
+        HRESULT qiRes = QueryInterface(IID_IUnknown, (void**)&legacyImpl);
+        _ASSERTE(SUCCEEDED(qiRes));
+    }
+
+    m_cdac = CDAC::Create(contractDescriptorAddr, m_pTarget, legacyImpl);
+
+    if (!m_cdac.IsValid())
+    {
+        if (fallback)
+            Release(); // Release QI AddRef
+        return E_FAIL;
+    }
+
+    return S_OK;
+#endif // CAN_USE_CDAC
+}
+
+
+//----------------------------------------------------------------------------
+//
 // CLRDataCreateInstance.
 // Creates the IXClrData object
 // This is the legacy entrypoint to DAC, used by dbgeng/dbghelp (windbg, SOS, watson, etc).
@@ -6629,46 +6696,37 @@ CLRDataCreateInstance(REFIID iid,
 
     // TODO: [cdac] Remove when cDAC deploys with SOS - https://github.com/dotnet/runtime/issues/108720
     ReleaseHolder<IUnknown> cdacInterface = nullptr;
-#ifdef CAN_USE_CDAC
-    CLRConfigNoCache enable = CLRConfigNoCache::Get("ENABLE_CDAC");
-    if (enable.IsSet())
+    bool fallback;
+    HRESULT cdacHr = pClrDataAccess->TryEnableCDAC(fallback);
+    if (cdacHr == S_OK)
     {
-        DWORD val;
-        if (enable.TryAsInteger(10, val) && val == 1)
+        pClrDataAccess->m_cdac.CreateSosInterface(&cdacInterface);
+        _ASSERTE(cdacInterface != nullptr);
+
+        if (cdacInterface != nullptr && fallback)
         {
-            // TODO: [cdac] TryGetSymbol is only implemented for Linux, OSX, and Windows.
-            uint64_t contractDescriptorAddr = 0;
-            if (TryGetSymbol(pClrDataAccess->m_pTarget, pClrDataAccess->m_globalBase, "DotNetRuntimeContractDescriptor", &contractDescriptorAddr))
-            {
-                IUnknown* thisImpl;
-                HRESULT qiRes = pClrDataAccess->QueryInterface(IID_IUnknown, (void**)&thisImpl);
-                _ASSERTE(SUCCEEDED(qiRes));
-                CDAC& cdac = pClrDataAccess->m_cdac;
-                cdac = CDAC::Create(contractDescriptorAddr, pClrDataAccess->m_pTarget, thisImpl);
-                if (cdac.IsValid())
-                {
-                    // Get SOS interfaces from the cDAC if available.
-                    cdac.CreateSosInterface(&cdacInterface);
-                    _ASSERTE(cdacInterface != nullptr);
+            // Lifetime is now managed by cDAC implementation of SOS interfaces.
+            // The managed RCW holds a ref on ClrDataAccess, keeping it alive.
+            // Release the creation ref (ownership transferred to RCW).
+            pClrDataAccess->Release();
+        }
+        // Without fallback, ClrDataAccess stays alive at ref=1. It must remain
+        // alive because it owns m_cdac (which holds the GCHandle, library, and
+        // DataTargetAdapter). This is a controlled leak for the test scenario.
 
-                    // Lifetime is now managed by cDAC implementation of SOS interfaces
-                    pClrDataAccess->Release();
-                }
-
-                // Release the AddRef from the QI.
-                pClrDataAccess->Release();
-            }
-
-            if (cdacInterface == nullptr)
-            {
-                // If we requested to use the cDAC, but failed to create the cDAC interface, return failure
-                // Release the ClrDataAccess instance we created
-                pClrDataAccess->Release();
-                return E_FAIL;
-            }
+        if (fallback)
+        {
+            // Release the AddRef from the QI in TryEnableCDAC.
+            pClrDataAccess->Release();
         }
     }
-#endif
+
+    if (cdacHr != S_FALSE && cdacInterface == nullptr)
+    {
+        // cDAC was requested but interface creation failed
+        pClrDataAccess->Release();
+        return E_FAIL;
+    }
     if (cdacInterface != nullptr)
     {
         hr = cdacInterface->QueryInterface(iid, iface);
