@@ -111,10 +111,74 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
         => LegacyFallbackHelper.CanFallback() && _legacyImpl is not null ? _legacyImpl.EndEnumExtents(handle) : HResults.E_NOTIMPL;
 
     int IXCLRDataMethodDefinition.GetCodeNotification(uint* flags)
-        => LegacyFallbackHelper.CanFallback() && _legacyImpl is not null ? _legacyImpl.GetCodeNotification(flags) : HResults.E_NOTIMPL;
+    {
+        int hr = HResults.S_OK;
+        try
+        {
+            if (flags is null)
+                throw new ArgumentNullException(nameof(flags));
+
+            *flags = _target.Contracts.Notifications.GetCodeNotification(_module, _token);
+        }
+        catch (System.InvalidOperationException)
+        {
+            hr = HResults.E_OUTOFMEMORY;
+        }
+        catch (System.ArgumentNullException)
+        {
+            hr = HResults.E_INVALIDARG;
+        }
+        catch (System.Exception ex)
+        {
+            hr = ex.HResult;
+        }
+
+#if DEBUG
+        if (_legacyImpl is not null)
+        {
+            uint flagsLocal = 0;
+            int hrLocal = _legacyImpl.GetCodeNotification(&flagsLocal);
+            Debug.ValidateHResult(hr, hrLocal);
+            if (hr >= 0 && hrLocal >= 0)
+            {
+                Debug.Assert(*flags == flagsLocal, $"GetCodeNotification cDAC: {*flags}, DAC: {flagsLocal}");
+            }
+        }
+#endif
+
+        return hr;
+    }
 
     int IXCLRDataMethodDefinition.SetCodeNotification(uint flags)
-        => LegacyFallbackHelper.CanFallback() && _legacyImpl is not null ? _legacyImpl.SetCodeNotification(flags) : HResults.E_NOTIMPL;
+    {
+        int hr = HResults.S_OK;
+        try
+        {
+            _target.Contracts.Notifications.SetCodeNotification(_module, _token, flags);
+        }
+        catch (System.ArgumentException)
+        {
+            hr = HResults.E_INVALIDARG;
+        }
+        catch (System.InvalidOperationException)
+        {
+            hr = HResults.E_OUTOFMEMORY;
+        }
+        catch (System.Exception ex)
+        {
+            hr = ex.HResult;
+        }
+
+#if DEBUG
+        if (_legacyImpl is not null)
+        {
+            int hrLocal = _legacyImpl.SetCodeNotification(flags);
+            Debug.ValidateHResult(hr, hrLocal);
+        }
+#endif
+
+        return hr;
+    }
 
     int IXCLRDataMethodDefinition.Request(uint reqCode, uint inBufferSize, byte* inBuffer, uint outBufferSize, byte* outBuffer)
         => LegacyFallbackHelper.CanFallback() && _legacyImpl is not null ? _legacyImpl.Request(reqCode, inBufferSize, inBuffer, outBufferSize, outBuffer) : HResults.E_NOTIMPL;

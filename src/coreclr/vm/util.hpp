@@ -593,15 +593,24 @@ extern void InitializeClrNotifications();
 GPTR_DECL(JITNotification, g_pNotificationTable);
 GVAL_DECL(ULONG32, g_dacNotificationFlags);
 
-#if defined(TARGET_UNIX) && !defined(DACCESS_COMPILE)
+#ifndef DACCESS_COMPILE
 
 inline void
 InitializeJITNotificationTable()
 {
     g_pNotificationTable = new (nothrow) JITNotification[1001];
+    if (g_pNotificationTable != NULL)
+    {
+        // Slot 0 is used for bookkeeping: methodToken stores the current length,
+        // clrModule stores the table capacity.
+        UINT *pLength = (UINT *) &(g_pNotificationTable->methodToken);
+        *pLength = 0;
+        UINT *pCapacity = (UINT *) &(g_pNotificationTable->clrModule);
+        *pCapacity = 1000;
+    }
 }
 
-#endif // TARGET_UNIX && !DACCESS_COMPILE
+#endif // !DACCESS_COMPILE
 
 class JITNotifications
 {

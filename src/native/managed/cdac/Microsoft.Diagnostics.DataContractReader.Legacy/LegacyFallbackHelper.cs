@@ -38,7 +38,6 @@ internal static class LegacyFallbackHelper
         // IXCLRDataMethodDefinition — not yet implemented in the cDAC.
         nameof(IXCLRDataMethodDefinition.StartEnumInstances),
         nameof(IXCLRDataMethodDefinition.GetName),
-        nameof(IXCLRDataMethodDefinition.SetCodeNotification),
         nameof(IXCLRDataMethodDefinition.HasClassOrMethodInstantiation),
     };
 

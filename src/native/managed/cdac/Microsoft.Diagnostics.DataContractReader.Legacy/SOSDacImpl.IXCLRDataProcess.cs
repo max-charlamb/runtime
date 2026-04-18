@@ -665,7 +665,43 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
         => LegacyFallbackHelper.CanFallback() && _legacyProcess is not null ? _legacyProcess.SetAllTypeNotifications(mod, flags) : HResults.E_NOTIMPL;
 
     int IXCLRDataProcess.SetAllCodeNotifications(IXCLRDataModule? mod, uint flags)
-        => LegacyFallbackHelper.CanFallback() && _legacyProcess is not null ? _legacyProcess.SetAllCodeNotifications(mod, flags) : HResults.E_NOTIMPL;
+    {
+        int hr = HResults.S_OK;
+        try
+        {
+            TargetPointer moduleAddr = TargetPointer.Null;
+            if (mod is not null)
+            {
+                if (mod is not ClrDataModule cdm)
+                    throw new ArgumentException();
+                moduleAddr = cdm.Address;
+            }
+
+            _target.Contracts.Notifications.SetAllCodeNotifications(moduleAddr, flags);
+        }
+        catch (System.ArgumentException)
+        {
+            hr = HResults.E_INVALIDARG;
+        }
+        catch (System.InvalidOperationException)
+        {
+            hr = HResults.E_OUTOFMEMORY;
+        }
+        catch (System.Exception ex)
+        {
+            hr = ex.HResult;
+        }
+
+#if DEBUG
+        if (_legacyProcess is not null)
+        {
+            int hrLocal = _legacyProcess.SetAllCodeNotifications(mod, flags);
+            Debug.ValidateHResult(hr, hrLocal);
+        }
+#endif
+
+        return hr;
+    }
 
     int IXCLRDataProcess.GetTypeNotifications(
         uint numTokens,
@@ -690,7 +726,69 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
         IXCLRDataModule? singleMod,
         [In, MarshalUsing(CountElementName = nameof(numTokens))] /*mdMethodDef*/ uint[] tokens,
         [In, Out, MarshalUsing(CountElementName = nameof(numTokens))] uint[] flags)
-        => LegacyFallbackHelper.CanFallback() && _legacyProcess is not null ? _legacyProcess.GetCodeNotifications(numTokens, mods, singleMod, tokens, flags) : HResults.E_NOTIMPL;
+    {
+        int hr = HResults.S_OK;
+        try
+        {
+            if (tokens is null || flags is null)
+                throw new ArgumentNullException();
+            if ((mods is null && singleMod is null) || (mods is not null && singleMod is not null))
+                throw new ArgumentException();
+
+            TargetPointer singleModuleAddr = TargetPointer.Null;
+            if (singleMod is not null)
+            {
+                if (singleMod is not ClrDataModule singleCdm)
+                    throw new ArgumentException();
+                singleModuleAddr = singleCdm.Address;
+            }
+
+            for (uint i = 0; i < numTokens; i++)
+            {
+                TargetPointer moduleAddr = singleModuleAddr;
+                if (mods is not null)
+                {
+                    moduleAddr = GetModuleAddress(mods[i]);
+                }
+
+                flags[i] = _target.Contracts.Notifications.GetCodeNotification(moduleAddr, tokens[i]);
+            }
+        }
+        catch (System.InvalidOperationException)
+        {
+            hr = HResults.E_OUTOFMEMORY;
+        }
+        catch (System.ArgumentNullException)
+        {
+            hr = HResults.E_INVALIDARG;
+        }
+        catch (System.ArgumentException)
+        {
+            hr = HResults.E_INVALIDARG;
+        }
+        catch (System.Exception ex)
+        {
+            hr = ex.HResult;
+        }
+
+#if DEBUG
+        if (_legacyProcess is not null)
+        {
+            uint[] flagsLocal = new uint[numTokens];
+            int hrLocal = _legacyProcess.GetCodeNotifications(numTokens, mods, singleMod, tokens, flagsLocal);
+            Debug.ValidateHResult(hr, hrLocal);
+            if (hr >= 0 && hrLocal >= 0)
+            {
+                for (uint i = 0; i < numTokens; i++)
+                {
+                    Debug.Assert(flags[i] == flagsLocal[i], $"GetCodeNotifications[{i}] cDAC: {flags[i]}, DAC: {flagsLocal[i]}");
+                }
+            }
+        }
+#endif
+
+        return hr;
+    }
 
     int IXCLRDataProcess.SetCodeNotifications(
         uint numTokens,
@@ -699,7 +797,71 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
         [In, MarshalUsing(CountElementName = nameof(numTokens))] /*mdMethodDef */ uint[] tokens,
         [In, MarshalUsing(CountElementName = nameof(numTokens))] uint[] flags,
         uint singleFlags)
-        => LegacyFallbackHelper.CanFallback() && _legacyProcess is not null ? _legacyProcess.SetCodeNotifications(numTokens, mods, singleMod, tokens, flags, singleFlags) : HResults.E_NOTIMPL;
+    {
+        int hr = HResults.S_OK;
+        try
+        {
+            ArgumentNullException.ThrowIfNull(tokens);
+            if ((mods is null && singleMod is null) || (mods is not null && singleMod is not null))
+                throw new ArgumentException();
+
+            // Validate flags
+            if (flags is not null)
+            {
+                for (uint check = 0; check < numTokens; check++)
+                {
+                    if (!IsValidMethodCodeNotification(flags[check]))
+                        throw new ArgumentException("Invalid code notification flags");
+                }
+            }
+            else if (!IsValidMethodCodeNotification(singleFlags))
+            {
+                throw new ArgumentException("Invalid code notification flags");
+            }
+
+            TargetPointer singleModuleAddr = TargetPointer.Null;
+            if (singleMod is not null)
+            {
+                if (singleMod is not ClrDataModule singleCdm)
+                    throw new ArgumentException();
+                singleModuleAddr = singleCdm.Address;
+            }
+
+            for (uint i = 0; i < numTokens; i++)
+            {
+                TargetPointer moduleAddr = singleModuleAddr;
+                if (mods is not null)
+                {
+                    moduleAddr = GetModuleAddress(mods[i]);
+                }
+
+                uint f = flags is not null ? flags[i] : singleFlags;
+                _target.Contracts.Notifications.SetCodeNotification(moduleAddr, tokens[i], f);
+            }
+        }
+        catch (System.ArgumentException)
+        {
+            hr = HResults.E_INVALIDARG;
+        }
+        catch (System.InvalidOperationException)
+        {
+            hr = HResults.E_OUTOFMEMORY;
+        }
+        catch (System.Exception ex)
+        {
+            hr = ex.HResult;
+        }
+
+#if DEBUG
+        if (_legacyProcess is not null)
+        {
+            int hrLocal = _legacyProcess.SetCodeNotifications(numTokens, mods, singleMod, tokens, flags!, singleFlags);
+            Debug.ValidateHResult(hr, hrLocal);
+        }
+#endif
+
+        return hr;
+    }
 
     int IXCLRDataProcess.GetOtherNotificationFlags(uint* flags)
     {
@@ -845,5 +1007,19 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
         }
 #endif
         return hr;
+    }
+
+    private static TargetPointer GetModuleAddress(void* comModulePtr)
+    {
+        StrategyBasedComWrappers cw = new();
+        object obj = cw.GetOrCreateObjectForComInstance((nint)comModulePtr, CreateObjectFlags.None);
+        if (obj is ClrDataModule cdm)
+            return cdm.Address;
+        throw new InvalidOperationException("Could not resolve module address from COM pointer");
+    }
+
+    private static bool IsValidMethodCodeNotification(uint flags)
+    {
+        return (flags & ~(0x1u | 0x2u)) == 0; // CLRDATA_METHNOTIFY_GENERATED | CLRDATA_METHNOTIFY_DISCARDED
     }
 }
