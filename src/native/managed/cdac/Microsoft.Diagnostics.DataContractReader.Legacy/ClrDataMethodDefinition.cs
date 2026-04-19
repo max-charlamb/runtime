@@ -133,18 +133,9 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
             hr = ex.HResult;
         }
 
-#if DEBUG
-        if (_legacyImpl is not null)
-        {
-            uint flagsLocal = 0;
-            int hrLocal = _legacyImpl.GetCodeNotification(&flagsLocal);
-            Debug.ValidateHResult(hr, hrLocal);
-            if (hr >= 0 && hrLocal >= 0)
-            {
-                Debug.Assert(*flags == flagsLocal, $"GetCodeNotification cDAC: {*flags}, DAC: {flagsLocal}");
-            }
-        }
-#endif
+        // No #if DEBUG validation: on Windows, when g_pNotificationTable is NULL,
+        // the cDAC returns S_OK with NONE (no notifications set) while the legacy DAC
+        // returns E_OUTOFMEMORY. This is an intentional behavioral improvement.
 
         return hr;
     }
@@ -169,13 +160,9 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
             hr = ex.HResult;
         }
 
-#if DEBUG
-        if (_legacyImpl is not null)
-        {
-            int hrLocal = _legacyImpl.SetCodeNotification(flags);
-            Debug.ValidateHResult(hr, hrLocal);
-        }
-#endif
+        // No #if DEBUG validation: SetCodeNotification is a write operation.
+        // Both the cDAC and legacy DAC independently allocate and write to
+        // g_pNotificationTable via AllocVirtual, causing dual-write corruption.
 
         return hr;
     }

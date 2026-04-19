@@ -692,13 +692,8 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
             hr = ex.HResult;
         }
 
-#if DEBUG
-        if (_legacyProcess is not null)
-        {
-            int hrLocal = _legacyProcess.SetAllCodeNotifications(mod, flags);
-            Debug.ValidateHResult(hr, hrLocal);
-        }
-#endif
+        // No #if DEBUG validation: SetAllCodeNotifications is a write operation.
+        // Both the cDAC and legacy DAC independently write to g_pNotificationTable.
 
         return hr;
     }
@@ -771,21 +766,8 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
             hr = ex.HResult;
         }
 
-#if DEBUG
-        if (_legacyProcess is not null)
-        {
-            uint[] flagsLocal = new uint[numTokens];
-            int hrLocal = _legacyProcess.GetCodeNotifications(numTokens, mods, singleMod, tokens, flagsLocal);
-            Debug.ValidateHResult(hr, hrLocal);
-            if (hr >= 0 && hrLocal >= 0)
-            {
-                for (uint i = 0; i < numTokens; i++)
-                {
-                    Debug.Assert(flags[i] == flagsLocal[i], $"GetCodeNotifications[{i}] cDAC: {flags[i]}, DAC: {flagsLocal[i]}");
-                }
-            }
-        }
-#endif
+        // No #if DEBUG validation: on Windows, when g_pNotificationTable is NULL,
+        // the cDAC returns S_OK with NONE while the legacy DAC returns E_OUTOFMEMORY.
 
         return hr;
     }
@@ -852,13 +834,8 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
             hr = ex.HResult;
         }
 
-#if DEBUG
-        if (_legacyProcess is not null)
-        {
-            int hrLocal = _legacyProcess.SetCodeNotifications(numTokens, mods, singleMod, tokens, flags!, singleFlags);
-            Debug.ValidateHResult(hr, hrLocal);
-        }
-#endif
+        // No #if DEBUG validation: SetCodeNotifications is a write operation.
+        // Both the cDAC and legacy DAC independently write to g_pNotificationTable.
 
         return hr;
     }

@@ -167,7 +167,7 @@ internal static class Entrypoints
                 $"{nameof(ICLRContractLocator)} failed to fetch the contract descriptor with HRESULT: 0x{hr:x}.");
         }
 
-        // Build the allocVirtual delegate if the target supports it
+        // Build the allocVirtual delegate if the target supports ICLRDataTarget2
         ContractDescriptorTarget.AllocVirtualDelegate? allocVirtual = null;
         if (dataTarget2 is not null)
         {
