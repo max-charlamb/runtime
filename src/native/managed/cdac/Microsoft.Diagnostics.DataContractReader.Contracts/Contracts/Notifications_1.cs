@@ -80,11 +80,17 @@ internal readonly struct Notifications_1 : INotifications
         int methodTokenOffset = jitNotifType.Fields[nameof(Data.JITNotification.MethodToken)].Offset;
         uint entrySize = (uint)jitNotifType.Size!.Value;
 
-        TargetPointer tablePointer = _target.ReadPointer(
-            _target.ReadGlobalPointer(Constants.Globals.JITNotificationTable));
+        TargetPointer tablePointer = ReadTablePointer();
 
+        // If table is null and we're clearing, nothing to do
+        if (tablePointer == TargetPointer.Null && flags == CLRDATA_METHNOTIFY_NONE)
+            return;
+
+        // If table is null and we're setting, lazily allocate
         if (tablePointer == TargetPointer.Null)
-            throw new InvalidOperationException("JIT notification table is not initialized");
+        {
+            tablePointer = AllocateTable(entrySize, methodTokenOffset, clrModuleOffset);
+        }
 
         // Bookkeeping is at index 0: methodToken field stores length, clrModule field stores capacity
         ulong bookkeepingAddr = tablePointer;
@@ -154,11 +160,10 @@ internal readonly struct Notifications_1 : INotifications
         int methodTokenOffset = jitNotifType.Fields[nameof(Data.JITNotification.MethodToken)].Offset;
         uint entrySize = (uint)jitNotifType.Size!.Value;
 
-        TargetPointer tablePointer = _target.ReadPointer(
-            _target.ReadGlobalPointer(Constants.Globals.JITNotificationTable));
+        TargetPointer tablePointer = ReadTablePointer();
 
         if (tablePointer == TargetPointer.Null)
-            throw new InvalidOperationException("JIT notification table is not initialized");
+            return CLRDATA_METHNOTIFY_NONE;
 
         ulong bookkeepingAddr = tablePointer;
         uint length = _target.Read<uint>(bookkeepingAddr + (ulong)methodTokenOffset);
@@ -185,11 +190,11 @@ internal readonly struct Notifications_1 : INotifications
         int methodTokenOffset = jitNotifType.Fields[nameof(Data.JITNotification.MethodToken)].Offset;
         uint entrySize = (uint)jitNotifType.Size!.Value;
 
-        TargetPointer tablePointer = _target.ReadPointer(
-            _target.ReadGlobalPointer(Constants.Globals.JITNotificationTable));
+        TargetPointer tablePointer = ReadTablePointer();
 
+        // If table is null, nothing to set/clear on
         if (tablePointer == TargetPointer.Null)
-            throw new InvalidOperationException("JIT notification table is not initialized");
+            return;
 
         ulong bookkeepingAddr = tablePointer;
         uint length = _target.Read<uint>(bookkeepingAddr + (ulong)methodTokenOffset);
@@ -292,5 +297,41 @@ internal readonly struct Notifications_1 : INotifications
     private static bool IsValidMethodCodeNotification(uint flags)
     {
         return (flags & ~(CLRDATA_METHNOTIFY_GENERATED | CLRDATA_METHNOTIFY_DISCARDED)) == 0;
+    }
+
+    private TargetPointer ReadTablePointer()
+    {
+        return _target.ReadPointer(
+            _target.ReadGlobalPointer(Constants.Globals.JITNotificationTable));
+    }
+
+    /// <summary>
+    /// Lazily allocate a JIT notification table in the target process using AllocateMemory,
+    /// initialize its bookkeeping entry, and write the pointer back to g_pNotificationTable.
+    /// </summary>
+    private TargetPointer AllocateTable(uint entrySize, int methodTokenOffset, int clrModuleOffset)
+    {
+        uint capacity = _target.ReadGlobal<uint>(Constants.Globals.JITNotificationTableSize);
+        // Table has capacity+1 entries: index 0 is bookkeeping
+        uint tableByteSize = entrySize * (capacity + 1);
+        TargetPointer tablePointer = _target.AllocateMemory(tableByteSize);
+
+        // Zero-initialize the entire table
+        byte[] zeros = new byte[tableByteSize];
+        _target.WriteBuffer(tablePointer.Value, zeros);
+
+        // Initialize bookkeeping at index 0
+        ulong bookkeepingAddr = tablePointer;
+        _target.Write<uint>(bookkeepingAddr + (ulong)methodTokenOffset, 0); // length = 0
+        WriteNUInt(bookkeepingAddr + (ulong)clrModuleOffset, new TargetPointer(capacity)); // capacity
+
+        // Write the table pointer back to the global
+        TargetPointer globalAddr = _target.ReadGlobalPointer(Constants.Globals.JITNotificationTable);
+        if (_target.PointerSize == 8)
+            _target.Write<ulong>(globalAddr, tablePointer.Value);
+        else
+            _target.Write<uint>(globalAddr, (uint)tablePointer.Value);
+
+        return tablePointer;
     }
 }

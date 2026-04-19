@@ -99,6 +99,20 @@ public abstract class Target
     public abstract void WriteBuffer(ulong address, Span<byte> buffer);
 
     /// <summary>
+    /// Allocate memory in the target process
+    /// </summary>
+    /// <param name="size">The number of bytes to allocate</param>
+    /// <returns>The address of the allocated memory in the target process</returns>
+    /// <exception cref="NotSupportedException">Thrown when the target does not support memory allocation</exception>
+    /// <remarks>
+    /// This is used for lazy allocation patterns where the debugger needs to allocate memory
+    /// in the target process (e.g., JIT notification tables on Windows).
+    /// The default implementation throws <see cref="NotSupportedException"/>.
+    /// </remarks>
+    public virtual TargetPointer AllocateMemory(uint size)
+        => throw new NotSupportedException("Target does not support memory allocation");
+
+    /// <summary>
     /// Read a null-terminated UTF-8 string from the target
     /// </summary>
     /// <param name="address">Address to start reading from</param>

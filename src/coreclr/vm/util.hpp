@@ -593,7 +593,7 @@ extern void InitializeClrNotifications();
 GPTR_DECL(JITNotification, g_pNotificationTable);
 GVAL_DECL(ULONG32, g_dacNotificationFlags);
 
-#ifndef DACCESS_COMPILE
+#if defined(TARGET_UNIX) && !defined(DACCESS_COMPILE)
 
 inline void
 InitializeJITNotificationTable()
@@ -610,7 +610,7 @@ InitializeJITNotificationTable()
     }
 }
 
-#endif // !DACCESS_COMPILE
+#endif // TARGET_UNIX && !DACCESS_COMPILE
 
 class JITNotifications
 {

@@ -1018,8 +1018,11 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
         throw new InvalidOperationException("Could not resolve module address from COM pointer");
     }
 
+    private const uint CLRDATA_METHNOTIFY_GENERATED = 1;
+    private const uint CLRDATA_METHNOTIFY_DISCARDED = 2;
+
     private static bool IsValidMethodCodeNotification(uint flags)
     {
-        return (flags & ~(0x1u | 0x2u)) == 0; // CLRDATA_METHNOTIFY_GENERATED | CLRDATA_METHNOTIFY_DISCARDED
+        return (flags & ~(CLRDATA_METHNOTIFY_GENERATED | CLRDATA_METHNOTIFY_DISCARDED)) == 0;
     }
 }

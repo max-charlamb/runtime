@@ -46,6 +46,16 @@ The JIT notification table is an array of `JITNotification` structs. Index 0 is 
 bookkeeping: its `MethodToken` field stores the current entry count and its `ClrModule` field stores
 the table capacity. Actual entries start at index 1.
 
+On Windows, the table starts as NULL (`g_pNotificationTable == 0`). On Unix, it is pre-allocated
+at startup. The contract handles both cases:
+- **GetCodeNotification** returns `CLRDATA_METHNOTIFY_NONE` when the table is NULL.
+- **SetAllCodeNotifications** is a no-op when the table is NULL.
+- **SetCodeNotification** with `CLRDATA_METHNOTIFY_NONE` is a no-op when the table is NULL.
+- **SetCodeNotification** with a non-zero flag lazily allocates the table via `Target.AllocateMemory`,
+  initializes the bookkeeping entry, and writes the pointer back to `g_pNotificationTable`. If
+  `AllocateMemory` is not available (e.g., when the cDAC is loaded via `cdac_reader_init`), a
+  `NotSupportedException` is thrown.
+
 ``` csharp
 public enum GcEventType
 {
@@ -122,6 +132,15 @@ void SetCodeNotification(TargetPointer module, uint methodToken, uint flags)
     // Read g_pNotificationTable pointer
     TargetPointer tablePointer = target.ReadPointer(
         target.ReadGlobalPointer("JITNotificationTable"));
+
+    // Handle null table
+    if (tablePointer == null)
+    {
+        if (flags == CLRDATA_METHNOTIFY_NONE) return; // nothing to clear
+        // Lazily allocate via Target.AllocateMemory
+        tablePointer = AllocateAndInitializeTable();
+    }
+
     // Read bookkeeping from index 0
     uint length = Read<uint>(tablePointer + MethodTokenOffset);
     uint capacity = ReadNUInt(tablePointer + ClrModuleOffset);
@@ -139,12 +158,14 @@ void SetCodeNotification(TargetPointer module, uint methodToken, uint flags)
 
 uint GetCodeNotification(TargetPointer module, uint methodToken)
 {
-    // Read the table and find the matching entry, return its state
+    // If table pointer is NULL, return CLRDATA_METHNOTIFY_NONE
+    // Otherwise read the table and find the matching entry, return its state
     // Returns CLRDATA_METHNOTIFY_NONE if not found
 }
 
 void SetAllCodeNotifications(TargetPointer module, uint flags)
 {
+    // If table pointer is NULL, return (no-op)
     // Iterate all active entries; if module is non-null, filter by module
     // Set or clear each matching entry's flags
 }

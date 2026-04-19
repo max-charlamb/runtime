@@ -46,6 +46,7 @@ public sealed unsafe class ContractDescriptorTarget : Target
     public delegate int ReadFromTargetDelegate(ulong address, Span<byte> bufferToFill);
     public delegate int WriteToTargetDelegate(ulong address, Span<byte> bufferToWrite);
     public delegate int GetTargetThreadContextDelegate(uint threadId, uint contextFlags, Span<byte> bufferToFill);
+    public delegate int AllocVirtualDelegate(ulong size, out ulong allocatedAddress);
     private static readonly UTF8Encoding strictUTF8Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly UTF8Encoding looseUTF8Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
 
@@ -82,7 +83,39 @@ public sealed unsafe class ContractDescriptorTarget : Target
     }
 
     /// <summary>
-    /// Create a new target instance from an externally-provided contract descriptor.
+    /// Create a new target instance from a contract descriptor embedded in the target memory,
+    /// with optional memory allocation support.
+    /// </summary>
+    /// <param name="contractDescriptor">The offset of the contract descriptor in the target memory</param>
+    /// <param name="readFromTarget">A callback to read memory blocks at a given address from the target</param>
+    /// <param name="writeToTarget">A callback to write memory blocks at a given address to the target</param>
+    /// <param name="getThreadContext">A callback to fetch a thread's context</param>
+    /// <param name="allocVirtual">An optional callback to allocate memory in the target process</param>
+    /// <param name="contractRegistrations">Registration actions that populate the contract registry (e.g., <see cref="Contracts.CoreCLRContracts.Register"/>)</param>
+    /// <param name="target">The target object.</param>
+    /// <returns>If a target instance could be created, <c>true</c>; otherwise, <c>false</c>.</returns>
+    public static bool TryCreate(
+        ulong contractDescriptor,
+        ReadFromTargetDelegate readFromTarget,
+        WriteToTargetDelegate writeToTarget,
+        GetTargetThreadContextDelegate getThreadContext,
+        AllocVirtualDelegate? allocVirtual,
+        Action<ContractRegistry>[] contractRegistrations,
+        [NotNullWhen(true)] out ContractDescriptorTarget? target)
+    {
+        DataTargetDelegates dataTargetDelegates = new DataTargetDelegates(readFromTarget, writeToTarget, getThreadContext, allocVirtual);
+        if (TryReadAllContractDescriptors(
+            contractDescriptor,
+            dataTargetDelegates,
+            out Descriptor[] descriptors))
+        {
+            target = new ContractDescriptorTarget(descriptors, dataTargetDelegates, contractRegistrations);
+            return true;
+        }
+
+        target = null;
+        return false;
+    }
     /// </summary>
     /// <param name="contractDescriptor">The contract descriptor to use for this target</param>
     /// <param name="globalPointerValues">The values for any global pointers specified in the contract descriptor.</param>
@@ -508,6 +541,18 @@ public sealed unsafe class ContractDescriptorTarget : Target
             throw new InvalidOperationException($"Failed to write {buffer.Length} bytes at 0x{address:x8}.");
     }
 
+    public override TargetPointer AllocateMemory(uint size)
+    {
+        if (!_dataTargetDelegates.HasAllocVirtual)
+            return base.AllocateMemory(size); // throws NotSupportedException
+
+        int hr = _dataTargetDelegates.AllocVirtual(size, out ulong allocatedAddress);
+        if (hr < 0 || allocatedAddress == 0)
+            throw new InvalidOperationException($"Failed to allocate {size} bytes in the target process (HRESULT: 0x{hr:x8}).");
+
+        return new TargetPointer(allocatedAddress);
+    }
+
     private bool TryWriteBuffer(ulong address, Span<byte> buffer)
     {
         return _dataTargetDelegates.WriteToTarget(address, buffer) >= 0;
@@ -864,7 +909,8 @@ public sealed unsafe class ContractDescriptorTarget : Target
     private readonly struct DataTargetDelegates(
         ReadFromTargetDelegate readFromTarget,
         WriteToTargetDelegate writeToTarget,
-        GetTargetThreadContextDelegate getThreadContext)
+        GetTargetThreadContextDelegate getThreadContext,
+        AllocVirtualDelegate? allocVirtual = null)
     {
         public int ReadFromTarget(ulong address, Span<byte> buffer)
         {
@@ -881,6 +927,16 @@ public sealed unsafe class ContractDescriptorTarget : Target
         public int WriteToTarget(ulong address, Span<byte> buffer)
         {
             return writeToTarget(address, buffer);
+        }
+        public bool HasAllocVirtual => allocVirtual is not null;
+        public int AllocVirtual(ulong size, out ulong allocatedAddress)
+        {
+            if (allocVirtual is null)
+            {
+                allocatedAddress = 0;
+                return -1;
+            }
+            return allocVirtual(size, out allocatedAddress);
         }
     }
 }

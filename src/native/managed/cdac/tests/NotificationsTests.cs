@@ -362,4 +362,138 @@ public class NotificationsTests
         Assert.Equal(CLRDATA_METHNOTIFY_DISCARDED, contract.GetCodeNotification(module, token1));
         Assert.Equal(CLRDATA_METHNOTIFY_DISCARDED, contract.GetCodeNotification(module, token2));
     }
+
+    // --- Null Table / Lazy Allocation Tests ---
+
+    private static INotifications CreateContractWithNullTable(TestPlaceholderTarget.AllocateMemoryDelegate? allocateMemory = null)
+    {
+        var arch = new MockTarget.Architecture { IsLittleEndian = true, Is64Bit = true };
+
+        var typeFields = new Dictionary<string, Target.FieldInfo>
+        {
+            [nameof(Data.JITNotification.State)] = new Target.FieldInfo { Offset = StateOffset },
+            [nameof(Data.JITNotification.ClrModule)] = new Target.FieldInfo { Offset = ClrModuleOffset },
+            [nameof(Data.JITNotification.MethodToken)] = new Target.FieldInfo { Offset = MethodTokenOffset },
+        };
+        var types = new Dictionary<DataType, Target.TypeInfo>
+        {
+            [DataType.JITNotification] = new Target.TypeInfo { Fields = typeFields, Size = EntrySize },
+        };
+
+        // Table pointer is null (all zeros)
+        byte[] tablePointerData = new byte[8];
+
+        var builder = new TestPlaceholderTarget.Builder(arch);
+        builder.MemoryBuilder.AddHeapFragment(new MockMemorySpace.HeapFragment
+        {
+            Address = TablePointerAddress,
+            Data = tablePointerData,
+            Name = "JITNotificationTablePointer"
+        });
+
+        builder.AddTypes(types);
+        builder.AddGlobals(
+            (Constants.Globals.JITNotificationTable, TablePointerAddress),
+            (Constants.Globals.JITNotificationTableSize, TableCapacity)
+        );
+        builder.AddContract<INotifications>(version: "c1");
+
+        if (allocateMemory is not null)
+            builder.UseAllocateMemory(allocateMemory);
+
+        return builder.Build().Contracts.Notifications;
+    }
+
+    [Fact]
+    public void GetCodeNotification_NullTable_ReturnsNone()
+    {
+        INotifications contract = CreateContractWithNullTable();
+        uint result = contract.GetCodeNotification(new TargetPointer(0x1000), 0x0600_0001);
+        Assert.Equal(CLRDATA_METHNOTIFY_NONE, result);
+    }
+
+    [Fact]
+    public void SetAllCodeNotifications_NullTable_NoOp()
+    {
+        INotifications contract = CreateContractWithNullTable();
+        // Should not throw
+        contract.SetAllCodeNotifications(TargetPointer.Null, CLRDATA_METHNOTIFY_NONE);
+    }
+
+    [Fact]
+    public void SetCodeNotification_NullTable_ClearIsNoOp()
+    {
+        INotifications contract = CreateContractWithNullTable();
+        // Clearing on a null table should not throw
+        contract.SetCodeNotification(new TargetPointer(0x1000), 0x0600_0001, CLRDATA_METHNOTIFY_NONE);
+    }
+
+    [Fact]
+    public void SetCodeNotification_NullTable_NoAllocator_Throws()
+    {
+        INotifications contract = CreateContractWithNullTable(allocateMemory: null);
+        Assert.Throws<NotSupportedException>(() =>
+            contract.SetCodeNotification(new TargetPointer(0x1000), 0x0600_0001, CLRDATA_METHNOTIFY_GENERATED));
+    }
+
+    [Fact]
+    public void SetCodeNotification_NullTable_LazyAllocates_ThenWorks()
+    {
+        var arch = new MockTarget.Architecture { IsLittleEndian = true, Is64Bit = true };
+        var helpers = new TargetTestHelpers(arch);
+
+        // Pre-allocate a memory region for the allocator to "return"
+        int totalTableSize = EntrySize * ((int)TableCapacity + 1);
+        byte[] allocatedTableData = new byte[totalTableSize];
+        const ulong AllocatedTableAddress = 0x3_0000;
+
+        var typeFields = new Dictionary<string, Target.FieldInfo>
+        {
+            [nameof(Data.JITNotification.State)] = new Target.FieldInfo { Offset = StateOffset },
+            [nameof(Data.JITNotification.ClrModule)] = new Target.FieldInfo { Offset = ClrModuleOffset },
+            [nameof(Data.JITNotification.MethodToken)] = new Target.FieldInfo { Offset = MethodTokenOffset },
+        };
+        var types = new Dictionary<DataType, Target.TypeInfo>
+        {
+            [DataType.JITNotification] = new Target.TypeInfo { Fields = typeFields, Size = EntrySize },
+        };
+
+        // Table pointer starts as null
+        byte[] tablePointerData = new byte[8];
+
+        var builder = new TestPlaceholderTarget.Builder(arch);
+        builder.MemoryBuilder.AddHeapFragment(new MockMemorySpace.HeapFragment
+        {
+            Address = TablePointerAddress,
+            Data = tablePointerData,
+            Name = "JITNotificationTablePointer"
+        });
+        builder.MemoryBuilder.AddHeapFragment(new MockMemorySpace.HeapFragment
+        {
+            Address = AllocatedTableAddress,
+            Data = allocatedTableData,
+            Name = "AllocatedJITNotificationTable"
+        });
+
+        builder.AddTypes(types);
+        builder.AddGlobals(
+            (Constants.Globals.JITNotificationTable, TablePointerAddress),
+            (Constants.Globals.JITNotificationTableSize, TableCapacity)
+        );
+        builder.AddContract<INotifications>(version: "c1");
+        builder.UseAllocateMemory((size) => new TargetPointer(AllocatedTableAddress));
+
+        var target = builder.Build();
+        INotifications contract = target.Contracts.Notifications;
+
+        TargetPointer module = new(0xAABB_CCDD);
+        uint token = 0x0600_0001;
+
+        // This should lazily allocate the table and set the notification
+        contract.SetCodeNotification(module, token, CLRDATA_METHNOTIFY_GENERATED);
+
+        // Should be able to read it back
+        uint result = contract.GetCodeNotification(module, token);
+        Assert.Equal(CLRDATA_METHNOTIFY_GENERATED, result);
+    }
 }
