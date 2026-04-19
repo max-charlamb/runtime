@@ -53,8 +53,8 @@ at startup. The contract handles both cases:
 - **SetCodeNotification** with `CLRDATA_METHNOTIFY_NONE` is a no-op when the table is NULL.
 - **SetCodeNotification** with a non-zero flag lazily allocates the table via `Target.AllocateMemory`,
   initializes the bookkeeping entry, and writes the pointer back to `g_pNotificationTable`. If
-  `AllocateMemory` is not available (e.g., when the cDAC is loaded via `cdac_reader_init`), a
-  `NotSupportedException` is thrown.
+  `AllocateMemory` is not available (e.g., when the debugger host does not support `ICLRDataTarget2`),
+  a `NotSupportedException` is thrown.
 
 ``` csharp
 public enum GcEventType

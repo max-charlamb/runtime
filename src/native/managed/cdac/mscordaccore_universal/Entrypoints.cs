@@ -18,9 +18,29 @@ internal static class Entrypoints
         delegate* unmanaged<ulong, byte*, uint, void*, int> readFromTarget,
         delegate* unmanaged<ulong, byte*, uint, void*, int> writeToTarget,
         delegate* unmanaged<uint, uint, uint, byte*, void*, int> readThreadContext,
+        delegate* unmanaged<uint, ulong*, void*, int> allocVirtual,
         void* delegateContext,
         IntPtr* handle)
     {
+        // Build the allocVirtual delegate if the caller provided a callback
+        ContractDescriptorTarget.AllocVirtualDelegate? allocDelegate = null;
+        if (allocVirtual != null)
+        {
+            allocDelegate = (ulong size, out ulong allocatedAddress) =>
+            {
+                if (size > uint.MaxValue)
+                {
+                    allocatedAddress = 0;
+                    return HResults.E_INVALIDARG;
+                }
+
+                fixed (ulong* addrPtr = &allocatedAddress)
+                {
+                    return allocVirtual((uint)size, addrPtr, delegateContext);
+                }
+            };
+        }
+
         // TODO: [cdac] Better error code/details
         if (!ContractDescriptorTarget.TryCreate(
             descriptor,
@@ -45,6 +65,7 @@ internal static class Entrypoints
                     return readThreadContext(threadId, contextFlags, (uint)buffer.Length, bufferPtr, delegateContext);
                 }
             },
+            allocDelegate,
             [Contracts.CoreCLRContracts.Register],
             out ContractDescriptorTarget? target))
             return -1;
