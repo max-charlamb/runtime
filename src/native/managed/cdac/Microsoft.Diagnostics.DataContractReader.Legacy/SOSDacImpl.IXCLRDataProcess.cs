@@ -988,10 +988,11 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
 
     private static TargetPointer GetModuleAddress(void* comModulePtr)
     {
-        StrategyBasedComWrappers cw = new();
-        object obj = cw.GetOrCreateObjectForComInstance((nint)comModulePtr, CreateObjectFlags.None);
-        if (obj is ClrDataModule cdm)
-            return cdm.Address;
+        if (System.Runtime.InteropServices.ComWrappers.TryGetObject((nint)comModulePtr, out object? obj))
+        {
+            if (obj is ClrDataModule cdm)
+                return cdm.Address;
+        }
         throw new InvalidOperationException("Could not resolve module address from COM pointer");
     }
 

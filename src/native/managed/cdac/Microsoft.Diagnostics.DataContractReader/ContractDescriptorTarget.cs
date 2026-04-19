@@ -116,6 +116,8 @@ public sealed unsafe class ContractDescriptorTarget : Target
         target = null;
         return false;
     }
+    /// <summary>
+    /// Creates a new <see cref="ContractDescriptorTarget"/> from parsed contract descriptors and callbacks.
     /// </summary>
     /// <param name="contractDescriptor">The contract descriptor to use for this target</param>
     /// <param name="globalPointerValues">The values for any global pointers specified in the contract descriptor.</param>

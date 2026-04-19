@@ -8,7 +8,7 @@ namespace Microsoft.Diagnostics.DataContractReader.Contracts;
 
 internal readonly struct Notifications_1 : INotifications
 {
-    private const ushort CLRDATA_METHNOTIFY_NONE = 0;
+    private const uint CLRDATA_METHNOTIFY_NONE = 0;
     private const uint CLRDATA_METHNOTIFY_GENERATED = 1;
     private const uint CLRDATA_METHNOTIFY_DISCARDED = 2;
 
@@ -281,7 +281,7 @@ internal readonly struct Notifications_1 : INotifications
     private void ClearEntry(ulong entriesBase, uint entrySize, int stateOffset, int clrModuleOffset, int methodTokenOffset, uint index)
     {
         ulong entryAddr = entriesBase + (ulong)(index * entrySize);
-        _target.Write<ushort>(entryAddr + (ulong)stateOffset, CLRDATA_METHNOTIFY_NONE);
+        _target.Write<ushort>(entryAddr + (ulong)stateOffset, (ushort)CLRDATA_METHNOTIFY_NONE);
         WriteNUInt(entryAddr + (ulong)clrModuleOffset, TargetPointer.Null);
         _target.Write<uint>(entryAddr + (ulong)methodTokenOffset, 0);
     }
@@ -327,10 +327,7 @@ internal readonly struct Notifications_1 : INotifications
 
         // Write the table pointer back to the global
         TargetPointer globalAddr = _target.ReadGlobalPointer(Constants.Globals.JITNotificationTable);
-        if (_target.PointerSize == 8)
-            _target.Write<ulong>(globalAddr, tablePointer.Value);
-        else
-            _target.Write<uint>(globalAddr, (uint)tablePointer.Value);
+        WriteNUInt(globalAddr, tablePointer);
 
         return tablePointer;
     }
