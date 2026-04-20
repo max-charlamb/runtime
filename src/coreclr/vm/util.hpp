@@ -599,15 +599,6 @@ inline void
 InitializeJITNotificationTable()
 {
     g_pNotificationTable = new (nothrow) JITNotification[1001];
-    if (g_pNotificationTable != NULL)
-    {
-        // Slot 0 is used for bookkeeping: methodToken stores the current length,
-        // clrModule stores the table capacity.
-        UINT *pLength = (UINT *) &(g_pNotificationTable->methodToken);
-        *pLength = 0;
-        UINT *pCapacity = (UINT *) &(g_pNotificationTable->clrModule);
-        *pCapacity = 1000;
-    }
 }
 
 #endif // TARGET_UNIX && !DACCESS_COMPILE

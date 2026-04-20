@@ -34,10 +34,11 @@ internal readonly struct CodeNotifications_1 : ICodeNotifications
             tablePointer = AllocateTable(entrySize);
         }
 
-        // Bookkeeping is at index 0: methodToken field stores length, clrModule field stores capacity
+        // Bookkeeping is at index 0: methodToken field stores length.
+        // Capacity is a compile-time invariant exposed via the JITNotificationTableSize global.
         Data.JITNotification bookkeeping = new(_target, tablePointer);
         uint length = bookkeeping.MethodToken;
-        uint capacity = (uint)bookkeeping.ClrModule.Value;
+        uint capacity = _target.ReadGlobal<uint>(Constants.Globals.JITNotificationTableSize);
         ulong entriesBase = tablePointer + entrySize;
 
         if (flags == CLRDATA_METHNOTIFY_NONE)
@@ -215,7 +216,8 @@ internal readonly struct CodeNotifications_1 : ICodeNotifications
 
     /// <summary>
     /// Lazily allocate a JIT notification table in the target process using AllocateMemory,
-    /// initialize its bookkeeping entry, and write the pointer back to g_pNotificationTable.
+    /// zero-fill it (slot 0's methodToken is the length, which starts at 0), and write the
+    /// pointer back to g_pNotificationTable.
     /// </summary>
     private TargetPointer AllocateTable(uint entrySize)
     {
@@ -226,10 +228,6 @@ internal readonly struct CodeNotifications_1 : ICodeNotifications
 
         byte[] zeros = new byte[tableByteSize];
         _target.WriteBuffer(tablePointer.Value, zeros);
-
-        Data.JITNotification bookkeeping = new(_target, tablePointer);
-        bookkeeping.WriteMethodToken(_target, 0);
-        bookkeeping.WriteClrModule(_target, new TargetPointer(capacity));
 
         TargetPointer globalAddr = _target.ReadGlobalPointer(Constants.Globals.JITNotificationTable);
         WriteNUInt(globalAddr, tablePointer);

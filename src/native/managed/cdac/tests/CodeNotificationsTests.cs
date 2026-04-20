@@ -49,9 +49,8 @@ public class CodeNotificationsTests
         int totalTableSize = EntrySize * ((int)TableCapacity + 1);
         byte[] tableData = new byte[totalTableSize];
 
-        // Initialize bookkeeping at index 0: length=0, capacity=TableCapacity
+        // Initialize bookkeeping at index 0: length=0 (capacity now comes from the global).
         helpers.Write(tableData.AsSpan(MethodTokenOffset), (uint)0);
-        helpers.WritePointer(tableData.AsSpan(ClrModuleOffset), TableCapacity);
 
         byte[] tablePointerData = new byte[8];
         helpers.WritePointer(tablePointerData.AsSpan(), TableAddress);

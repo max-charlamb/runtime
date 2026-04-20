@@ -46,18 +46,21 @@ Global variables used:
 Contracts used: none
 
 The JIT notification table is an array of `JITNotification` structs. Index 0 is reserved for
-bookkeeping: its `MethodToken` field stores the current entry count and its `ClrModule` field stores
-the table capacity. Actual entries start at index 1.
+bookkeeping: its `MethodToken` field stores the current entry count (length). The table capacity
+is a compile-time invariant exposed via the `JITNotificationTableSize` global, so slot 0's
+`ClrModule` and `State` fields are unused. Actual entries start at index 1.
 
 On Windows, the table starts as NULL (`g_pNotificationTable == 0`). On Unix, it is pre-allocated
-at startup. The contract handles both cases:
+at startup; the runtime's `new JITNotification[1001]` default-constructs every slot with
+`state = 0`, `clrModule = 0`, `methodToken = 0`, so slot 0's length starts at 0 naturally.
+The contract handles both cases:
 - **GetCodeNotification** throws `InvalidOperationException` (→ `E_OUTOFMEMORY`) when the table is NULL.
 - **SetAllCodeNotifications** is a no-op when the table is NULL.
 - **SetCodeNotification** with `CLRDATA_METHNOTIFY_NONE` is a no-op when the table is NULL.
 - **SetCodeNotification** with a non-zero flag lazily allocates the table via `Target.AllocateMemory`,
-  initializes the bookkeeping entry, and writes the pointer back to `g_pNotificationTable`. If
-  `AllocateMemory` is not available (e.g., when the debugger host does not support `ICLRDataTarget2`),
-  a `NotSupportedException` is thrown.
+  zero-fills it (so slot 0's length starts at 0), and writes the pointer back to
+  `g_pNotificationTable`. If `AllocateMemory` is not available (e.g., when the debugger host does
+  not support `ICLRDataTarget2`), a `NotSupportedException` is thrown.
 
 Batch callers (e.g., `IXCLRDataProcess::SetCodeNotifications`) should reject requests whose
 `numTokens` exceeds `GetCodeNotificationCapacity()` upfront, matching the legacy DAC behavior
@@ -77,9 +80,9 @@ void SetCodeNotification(TargetPointer module, uint methodToken, uint flags)
         tablePointer = AllocateAndInitializeTable();
     }
 
-    // Read bookkeeping from index 0
+    // Read bookkeeping from index 0 (length only; capacity comes from the global).
     uint length = Read<uint>(tablePointer + MethodTokenOffset);
-    uint capacity = ReadNUInt(tablePointer + ClrModuleOffset);
+    uint capacity = target.ReadGlobal<uint>("JITNotificationTableSize");
     ulong entriesBase = tablePointer + entrySize;
 
     if (flags == CLRDATA_METHNOTIFY_NONE)
