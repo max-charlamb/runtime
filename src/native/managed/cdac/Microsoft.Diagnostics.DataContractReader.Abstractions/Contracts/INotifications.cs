@@ -63,15 +63,6 @@ public interface INotifications : IContract
     void SetGcNotification(int condemnedGeneration) => throw new NotImplementedException();
 
     bool TryParseNotification(ReadOnlySpan<TargetPointer> exceptionInformation, [NotNullWhen(true)] out NotificationData? notification) => throw new NotImplementedException();
-
-    void SetCodeNotification(TargetPointer module, uint methodToken, uint flags) => throw new NotImplementedException();
-
-    uint GetCodeNotification(TargetPointer module, uint methodToken) => throw new NotImplementedException();
-
-    /// <summary>
-    /// Set notification flags for all methods in a module, or all methods if module is null.
-    /// </summary>
-    void SetAllCodeNotifications(TargetPointer module, uint flags) => throw new NotImplementedException();
 }
 
 public readonly struct Notifications : INotifications

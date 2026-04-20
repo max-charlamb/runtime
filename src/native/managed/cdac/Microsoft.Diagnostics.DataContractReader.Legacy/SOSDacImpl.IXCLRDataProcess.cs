@@ -677,7 +677,7 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
                 moduleAddr = cdm.Address;
             }
 
-            _target.Contracts.Notifications.SetAllCodeNotifications(moduleAddr, flags);
+            _target.Contracts.CodeNotifications.SetAllCodeNotifications(moduleAddr, flags);
         }
         catch (System.ArgumentException)
         {
@@ -746,7 +746,7 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
                     moduleAddr = GetModuleAddress(mods[i]);
                 }
 
-                flags[i] = _target.Contracts.Notifications.GetCodeNotification(moduleAddr, tokens[i]);
+                flags[i] = _target.Contracts.CodeNotifications.GetCodeNotification(moduleAddr, tokens[i]);
             }
         }
         catch (System.InvalidOperationException)
@@ -818,7 +818,7 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
                 }
 
                 uint f = flags is not null ? flags[i] : singleFlags;
-                _target.Contracts.Notifications.SetCodeNotification(moduleAddr, tokens[i], f);
+                _target.Contracts.CodeNotifications.SetCodeNotification(moduleAddr, tokens[i], f);
             }
         }
         catch (System.ArgumentException)

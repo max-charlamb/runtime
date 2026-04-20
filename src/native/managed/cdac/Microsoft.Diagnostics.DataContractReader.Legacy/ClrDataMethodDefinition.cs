@@ -118,7 +118,7 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
             if (flags is null)
                 throw new ArgumentNullException(nameof(flags));
 
-            *flags = _target.Contracts.Notifications.GetCodeNotification(_module, _token);
+            *flags = _target.Contracts.CodeNotifications.GetCodeNotification(_module, _token);
         }
         catch (System.InvalidOperationException)
         {
@@ -145,7 +145,7 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
         int hr = HResults.S_OK;
         try
         {
-            _target.Contracts.Notifications.SetCodeNotification(_module, _token, flags);
+            _target.Contracts.CodeNotifications.SetCodeNotification(_module, _token, flags);
         }
         catch (System.ArgumentException)
         {
