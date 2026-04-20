@@ -74,12 +74,7 @@ internal readonly struct Notifications_1 : INotifications
         if (!IsValidMethodCodeNotification(flags))
             throw new ArgumentException("Invalid code notification flags", nameof(flags));
 
-        Target.TypeInfo jitNotifType = _target.GetTypeInfo(DataType.JITNotification);
-        int stateOffset = jitNotifType.Fields[nameof(Data.JITNotification.State)].Offset;
-        int clrModuleOffset = jitNotifType.Fields[nameof(Data.JITNotification.ClrModule)].Offset;
-        int methodTokenOffset = jitNotifType.Fields[nameof(Data.JITNotification.MethodToken)].Offset;
-        uint entrySize = (uint)jitNotifType.Size!.Value;
-
+        uint entrySize = GetEntrySize();
         TargetPointer tablePointer = ReadTablePointer();
 
         // If table is null and we're clearing, nothing to do
@@ -89,25 +84,26 @@ internal readonly struct Notifications_1 : INotifications
         // If table is null and we're setting, lazily allocate
         if (tablePointer == TargetPointer.Null)
         {
-            tablePointer = AllocateTable(entrySize, methodTokenOffset, clrModuleOffset);
+            tablePointer = AllocateTable(entrySize);
         }
 
         // Bookkeeping is at index 0: methodToken field stores length, clrModule field stores capacity
-        ulong bookkeepingAddr = tablePointer;
-        uint length = _target.Read<uint>(bookkeepingAddr + (ulong)methodTokenOffset);
-        uint capacity = (uint)_target.ReadNUInt(bookkeepingAddr + (ulong)clrModuleOffset).Value;
+        Data.JITNotification bookkeeping = new(_target, tablePointer);
+        uint length = bookkeeping.MethodToken;
+        uint capacity = (uint)bookkeeping.ClrModule.Value;
         ulong entriesBase = tablePointer + entrySize;
 
         if (flags == CLRDATA_METHNOTIFY_NONE)
         {
             // Remove: find and clear the entry
-            if (TryFindEntry(entriesBase, entrySize, stateOffset, clrModuleOffset, methodTokenOffset, length, module, methodToken, out uint foundIndex))
+            if (TryFindEntry(entriesBase, entrySize, length, module, methodToken, out uint foundIndex))
             {
-                ClearEntry(entriesBase, entrySize, stateOffset, clrModuleOffset, methodTokenOffset, foundIndex);
+                Data.JITNotification entry = new(_target, new TargetPointer(entriesBase + (ulong)(foundIndex * entrySize)));
+                entry.Clear(_target);
                 // If this was the last entry, decrement length
                 if (foundIndex == length - 1)
                 {
-                    _target.Write<uint>(bookkeepingAddr + (ulong)methodTokenOffset, length - 1);
+                    bookkeeping.WriteMethodToken(_target, length - 1);
                 }
             }
 
@@ -115,10 +111,10 @@ internal readonly struct Notifications_1 : INotifications
         }
 
         // Update existing entry
-        if (TryFindEntry(entriesBase, entrySize, stateOffset, clrModuleOffset, methodTokenOffset, length, module, methodToken, out uint existingIndex))
+        if (TryFindEntry(entriesBase, entrySize, length, module, methodToken, out uint existingIndex))
         {
-            ulong entryAddr = entriesBase + (ulong)(existingIndex * entrySize);
-            _target.Write<ushort>(entryAddr + (ulong)stateOffset, (ushort)flags);
+            Data.JITNotification entry = new(_target, new TargetPointer(entriesBase + (ulong)(existingIndex * entrySize)));
+            entry.WriteState(_target, (ushort)flags);
 
             return;
         }
@@ -127,9 +123,8 @@ internal readonly struct Notifications_1 : INotifications
         uint firstFree = length;
         for (uint i = 0; i < length; i++)
         {
-            ulong entryAddr = entriesBase + (ulong)(i * entrySize);
-            ushort state = _target.Read<ushort>(entryAddr + (ulong)stateOffset);
-            if (state == CLRDATA_METHNOTIFY_NONE)
+            Data.JITNotification entry = new(_target, new TargetPointer(entriesBase + (ulong)(i * entrySize)));
+            if (entry.IsFree)
             {
                 firstFree = i;
                 break;
@@ -140,40 +135,33 @@ internal readonly struct Notifications_1 : INotifications
             throw new InvalidOperationException("JIT notification table is full");
 
         // Write new entry
-        ulong newEntryAddr = entriesBase + (ulong)(firstFree * entrySize);
-        WriteNUInt(newEntryAddr + (ulong)clrModuleOffset, module);
-        _target.Write<uint>(newEntryAddr + (ulong)methodTokenOffset, methodToken);
-        _target.Write<ushort>(newEntryAddr + (ulong)stateOffset, (ushort)flags);
+        Data.JITNotification newEntry = new(_target, new TargetPointer(entriesBase + (ulong)(firstFree * entrySize)));
+        newEntry.WriteEntry(_target, module, methodToken, (ushort)flags);
 
         // Update length if we used a slot at the end
         if (firstFree >= length)
         {
-            _target.Write<uint>(bookkeepingAddr + (ulong)methodTokenOffset, length + 1);
+            bookkeeping.WriteMethodToken(_target, length + 1);
         }
     }
 
     uint INotifications.GetCodeNotification(TargetPointer module, uint methodToken)
     {
-        Target.TypeInfo jitNotifType = _target.GetTypeInfo(DataType.JITNotification);
-        int stateOffset = jitNotifType.Fields[nameof(Data.JITNotification.State)].Offset;
-        int clrModuleOffset = jitNotifType.Fields[nameof(Data.JITNotification.ClrModule)].Offset;
-        int methodTokenOffset = jitNotifType.Fields[nameof(Data.JITNotification.MethodToken)].Offset;
-        uint entrySize = (uint)jitNotifType.Size!.Value;
-
+        uint entrySize = GetEntrySize();
         TargetPointer tablePointer = ReadTablePointer();
 
         if (tablePointer == TargetPointer.Null)
             return CLRDATA_METHNOTIFY_NONE;
 
-        ulong bookkeepingAddr = tablePointer;
-        uint length = _target.Read<uint>(bookkeepingAddr + (ulong)methodTokenOffset);
+        Data.JITNotification bookkeeping = new(_target, tablePointer);
+        uint length = bookkeeping.MethodToken;
         ulong entriesBase = tablePointer + entrySize;
 
-        if (TryFindEntry(entriesBase, entrySize, stateOffset, clrModuleOffset, methodTokenOffset, length, module, methodToken, out uint foundIndex))
+        if (TryFindEntry(entriesBase, entrySize, length, module, methodToken, out uint foundIndex))
         {
-            ulong entryAddr = entriesBase + (ulong)(foundIndex * entrySize);
+            Data.JITNotification entry = new(_target, new TargetPointer(entriesBase + (ulong)(foundIndex * entrySize)));
 
-            return _target.Read<ushort>(entryAddr + (ulong)stateOffset);
+            return entry.State;
         }
 
         return CLRDATA_METHNOTIFY_NONE;
@@ -184,45 +172,38 @@ internal readonly struct Notifications_1 : INotifications
         if (!IsValidMethodCodeNotification(flags))
             throw new ArgumentException("Invalid code notification flags", nameof(flags));
 
-        Target.TypeInfo jitNotifType = _target.GetTypeInfo(DataType.JITNotification);
-        int stateOffset = jitNotifType.Fields[nameof(Data.JITNotification.State)].Offset;
-        int clrModuleOffset = jitNotifType.Fields[nameof(Data.JITNotification.ClrModule)].Offset;
-        int methodTokenOffset = jitNotifType.Fields[nameof(Data.JITNotification.MethodToken)].Offset;
-        uint entrySize = (uint)jitNotifType.Size!.Value;
-
+        uint entrySize = GetEntrySize();
         TargetPointer tablePointer = ReadTablePointer();
 
         // If table is null, nothing to set/clear on
         if (tablePointer == TargetPointer.Null)
             return;
 
-        ulong bookkeepingAddr = tablePointer;
-        uint length = _target.Read<uint>(bookkeepingAddr + (ulong)methodTokenOffset);
+        Data.JITNotification bookkeeping = new(_target, tablePointer);
+        uint length = bookkeeping.MethodToken;
         ulong entriesBase = tablePointer + entrySize;
 
         bool changed = false;
         for (uint i = 0; i < length; i++)
         {
-            ulong entryAddr = entriesBase + (ulong)(i * entrySize);
-            ushort state = _target.Read<ushort>(entryAddr + (ulong)stateOffset);
-            if (state == CLRDATA_METHNOTIFY_NONE)
+            Data.JITNotification entry = new(_target, new TargetPointer(entriesBase + (ulong)(i * entrySize)));
+            if (entry.IsFree)
                 continue;
 
             // If a module filter is specified, check it
             if (module != TargetPointer.Null)
             {
-                TargetNUInt entryModule = _target.ReadNUInt(entryAddr + (ulong)clrModuleOffset);
-                if (entryModule.Value != module.Value)
+                if (entry.ClrModule.Value != module.Value)
                     continue;
             }
 
             if (flags == CLRDATA_METHNOTIFY_NONE)
             {
-                ClearEntry(entriesBase, entrySize, stateOffset, clrModuleOffset, methodTokenOffset, i);
+                entry.Clear(_target);
             }
             else
             {
-                _target.Write<ushort>(entryAddr + (ulong)stateOffset, (ushort)flags);
+                entry.WriteState(_target, (ushort)flags);
             }
 
             changed = true;
@@ -235,37 +216,32 @@ internal readonly struct Notifications_1 : INotifications
             uint newLength = length;
             while (newLength > 0)
             {
-                ulong entryAddr = entriesBase + (ulong)((newLength - 1) * entrySize);
-                ushort state = _target.Read<ushort>(entryAddr + (ulong)stateOffset);
-                if (state != CLRDATA_METHNOTIFY_NONE)
+                Data.JITNotification entry = new(_target, new TargetPointer(entriesBase + (ulong)((newLength - 1) * entrySize)));
+                if (!entry.IsFree)
                     break;
                 newLength--;
             }
 
-            _target.Write<uint>(bookkeepingAddr + (ulong)methodTokenOffset, newLength);
+            bookkeeping.WriteMethodToken(_target, newLength);
         }
     }
 
     private bool TryFindEntry(
         ulong entriesBase, uint entrySize,
-        int stateOffset, int clrModuleOffset, int methodTokenOffset,
         uint length,
         TargetPointer module, uint methodToken,
         out uint index)
     {
         for (uint i = 0; i < length; i++)
         {
-            ulong entryAddr = entriesBase + (ulong)(i * entrySize);
-            ushort state = _target.Read<ushort>(entryAddr + (ulong)stateOffset);
-            if (state == CLRDATA_METHNOTIFY_NONE)
+            Data.JITNotification entry = new(_target, new TargetPointer(entriesBase + (ulong)(i * entrySize)));
+            if (entry.IsFree)
                 continue;
 
-            TargetNUInt entryModule = _target.ReadNUInt(entryAddr + (ulong)clrModuleOffset);
-            if (entryModule.Value != module.Value)
+            if (entry.ClrModule.Value != module.Value)
                 continue;
 
-            uint entryToken = _target.Read<uint>(entryAddr + (ulong)methodTokenOffset);
-            if (entryToken != methodToken)
+            if (entry.MethodToken != methodToken)
                 continue;
 
             index = i;
@@ -278,25 +254,15 @@ internal readonly struct Notifications_1 : INotifications
         return false;
     }
 
-    private void ClearEntry(ulong entriesBase, uint entrySize, int stateOffset, int clrModuleOffset, int methodTokenOffset, uint index)
-    {
-        ulong entryAddr = entriesBase + (ulong)(index * entrySize);
-        _target.Write<ushort>(entryAddr + (ulong)stateOffset, (ushort)CLRDATA_METHNOTIFY_NONE);
-        WriteNUInt(entryAddr + (ulong)clrModuleOffset, TargetPointer.Null);
-        _target.Write<uint>(entryAddr + (ulong)methodTokenOffset, 0);
-    }
-
-    private void WriteNUInt(ulong address, TargetPointer value)
-    {
-        if (_target.PointerSize == 8)
-            _target.Write<ulong>(address, value.Value);
-        else
-            _target.Write<uint>(address, (uint)value.Value);
-    }
-
     private static bool IsValidMethodCodeNotification(uint flags)
     {
         return (flags & ~(CLRDATA_METHNOTIFY_GENERATED | CLRDATA_METHNOTIFY_DISCARDED)) == 0;
+    }
+
+    private uint GetEntrySize()
+    {
+        Target.TypeInfo jitNotifType = _target.GetTypeInfo(DataType.JITNotification);
+        return (uint)jitNotifType.Size!.Value;
     }
 
     private TargetPointer ReadTablePointer()
@@ -309,7 +275,7 @@ internal readonly struct Notifications_1 : INotifications
     /// Lazily allocate a JIT notification table in the target process using AllocateMemory,
     /// initialize its bookkeeping entry, and write the pointer back to g_pNotificationTable.
     /// </summary>
-    private TargetPointer AllocateTable(uint entrySize, int methodTokenOffset, int clrModuleOffset)
+    private TargetPointer AllocateTable(uint entrySize)
     {
         uint capacity = _target.ReadGlobal<uint>(Constants.Globals.JITNotificationTableSize);
         // Table has capacity+1 entries: index 0 is bookkeeping
@@ -320,15 +286,23 @@ internal readonly struct Notifications_1 : INotifications
         byte[] zeros = new byte[tableByteSize];
         _target.WriteBuffer(tablePointer.Value, zeros);
 
-        // Initialize bookkeeping at index 0
-        ulong bookkeepingAddr = tablePointer;
-        _target.Write<uint>(bookkeepingAddr + (ulong)methodTokenOffset, 0); // length = 0
-        WriteNUInt(bookkeepingAddr + (ulong)clrModuleOffset, new TargetPointer(capacity)); // capacity
+        // Initialize bookkeeping at index 0 via the Data class
+        Data.JITNotification bookkeeping = new(_target, tablePointer);
+        bookkeeping.WriteMethodToken(_target, 0); // length = 0
+        bookkeeping.WriteClrModule(_target, new TargetPointer(capacity)); // capacity
 
         // Write the table pointer back to the global
         TargetPointer globalAddr = _target.ReadGlobalPointer(Constants.Globals.JITNotificationTable);
         WriteNUInt(globalAddr, tablePointer);
 
         return tablePointer;
+    }
+
+    private void WriteNUInt(ulong address, TargetPointer value)
+    {
+        if (_target.PointerSize == 8)
+            _target.Write<ulong>(address, value.Value);
+        else
+            _target.Write<uint>(address, (uint)value.Value);
     }
 }

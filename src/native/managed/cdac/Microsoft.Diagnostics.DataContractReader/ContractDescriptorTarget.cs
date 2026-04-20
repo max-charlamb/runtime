@@ -47,6 +47,8 @@ public sealed unsafe class ContractDescriptorTarget : Target
     public delegate int WriteToTargetDelegate(ulong address, Span<byte> bufferToWrite);
     public delegate int GetTargetThreadContextDelegate(uint threadId, uint contextFlags, Span<byte> bufferToFill);
     public delegate int AllocVirtualDelegate(ulong size, out ulong allocatedAddress);
+    private static int ThrowAllocVirtual(ulong size, out ulong allocatedAddress)
+        => throw new NotSupportedException("Target does not support memory allocation");
     private static readonly UTF8Encoding strictUTF8Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly UTF8Encoding looseUTF8Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
 
@@ -68,7 +70,7 @@ public sealed unsafe class ContractDescriptorTarget : Target
         Action<ContractRegistry>[] contractRegistrations,
         [NotNullWhen(true)] out ContractDescriptorTarget? target)
     {
-        DataTargetDelegates dataTargetDelegates = new DataTargetDelegates(readFromTarget, writeToTarget, getThreadContext);
+        DataTargetDelegates dataTargetDelegates = new DataTargetDelegates(readFromTarget, writeToTarget, getThreadContext, ThrowAllocVirtual);
         if (TryReadAllContractDescriptors(
             contractDescriptor,
             dataTargetDelegates,
@@ -103,7 +105,7 @@ public sealed unsafe class ContractDescriptorTarget : Target
         Action<ContractRegistry>[] contractRegistrations,
         [NotNullWhen(true)] out ContractDescriptorTarget? target)
     {
-        DataTargetDelegates dataTargetDelegates = new DataTargetDelegates(readFromTarget, writeToTarget, getThreadContext, allocVirtual);
+        DataTargetDelegates dataTargetDelegates = new DataTargetDelegates(readFromTarget, writeToTarget, getThreadContext, allocVirtual ?? ThrowAllocVirtual);
         if (TryReadAllContractDescriptors(
             contractDescriptor,
             dataTargetDelegates,
@@ -147,7 +149,7 @@ public sealed unsafe class ContractDescriptorTarget : Target
                     PointerData = globalPointerValues
                 }
             ],
-            new DataTargetDelegates(readFromTarget, writeToTarget, getThreadContext),
+            new DataTargetDelegates(readFromTarget, writeToTarget, getThreadContext, ThrowAllocVirtual),
             contractRegistrations ?? []);
     }
 
@@ -545,9 +547,6 @@ public sealed unsafe class ContractDescriptorTarget : Target
 
     public override TargetPointer AllocateMemory(uint size)
     {
-        if (!_dataTargetDelegates.HasAllocVirtual)
-            return base.AllocateMemory(size); // throws NotSupportedException
-
         int hr = _dataTargetDelegates.AllocVirtual(size, out ulong allocatedAddress);
         if (hr < 0 || allocatedAddress == 0)
             throw new InvalidOperationException($"Failed to allocate {size} bytes in the target process (HRESULT: 0x{hr:x8}).");
@@ -912,7 +911,7 @@ public sealed unsafe class ContractDescriptorTarget : Target
         ReadFromTargetDelegate readFromTarget,
         WriteToTargetDelegate writeToTarget,
         GetTargetThreadContextDelegate getThreadContext,
-        AllocVirtualDelegate? allocVirtual = null)
+        AllocVirtualDelegate allocVirtual)
     {
         public int ReadFromTarget(ulong address, Span<byte> buffer)
         {
@@ -930,14 +929,8 @@ public sealed unsafe class ContractDescriptorTarget : Target
         {
             return writeToTarget(address, buffer);
         }
-        public bool HasAllocVirtual => allocVirtual is not null;
         public int AllocVirtual(ulong size, out ulong allocatedAddress)
         {
-            if (allocVirtual is null)
-            {
-                allocatedAddress = 0;
-                return -1;
-            }
             return allocVirtual(size, out allocatedAddress);
         }
     }
