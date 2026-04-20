@@ -92,7 +92,7 @@ internal readonly struct CodeNotifications_1 : ICodeNotifications
         TargetPointer tablePointer = ReadTablePointer();
 
         if (tablePointer == TargetPointer.Null)
-            return CLRDATA_METHNOTIFY_NONE;
+            throw new InvalidOperationException("JIT notification table not allocated");
 
         Data.JITNotification bookkeeping = new(_target, tablePointer);
         uint length = bookkeeping.MethodToken;

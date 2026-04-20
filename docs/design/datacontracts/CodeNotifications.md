@@ -51,13 +51,17 @@ the table capacity. Actual entries start at index 1.
 
 On Windows, the table starts as NULL (`g_pNotificationTable == 0`). On Unix, it is pre-allocated
 at startup. The contract handles both cases:
-- **GetCodeNotification** returns `CLRDATA_METHNOTIFY_NONE` when the table is NULL.
+- **GetCodeNotification** throws `InvalidOperationException` (→ `E_OUTOFMEMORY`) when the table is NULL.
 - **SetAllCodeNotifications** is a no-op when the table is NULL.
 - **SetCodeNotification** with `CLRDATA_METHNOTIFY_NONE` is a no-op when the table is NULL.
 - **SetCodeNotification** with a non-zero flag lazily allocates the table via `Target.AllocateMemory`,
   initializes the bookkeeping entry, and writes the pointer back to `g_pNotificationTable`. If
   `AllocateMemory` is not available (e.g., when the debugger host does not support `ICLRDataTarget2`),
   a `NotSupportedException` is thrown.
+
+Batch callers (e.g., `IXCLRDataProcess::SetCodeNotifications`) should reject requests whose
+`numTokens` exceeds `GetCodeNotificationCapacity()` upfront, matching the legacy DAC behavior
+and preventing partial writes when a batch would overflow the table.
 
 ``` csharp
 void SetCodeNotification(TargetPointer module, uint methodToken, uint flags)
@@ -90,7 +94,7 @@ void SetCodeNotification(TargetPointer module, uint methodToken, uint flags)
 
 uint GetCodeNotification(TargetPointer module, uint methodToken)
 {
-    // If table pointer is NULL, return CLRDATA_METHNOTIFY_NONE
+    // If table pointer is NULL, throw InvalidOperationException (maps to E_OUTOFMEMORY)
     // Otherwise read the table and find the matching entry, return its state
     // Returns CLRDATA_METHNOTIFY_NONE if not found
 }

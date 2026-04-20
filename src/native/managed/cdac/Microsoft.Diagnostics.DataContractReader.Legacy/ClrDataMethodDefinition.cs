@@ -133,9 +133,9 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
             hr = ex.HResult;
         }
 
-        // No #if DEBUG validation: on Windows, when g_pNotificationTable is NULL,
-        // the cDAC returns S_OK with NONE (no notifications set) while the legacy DAC
-        // returns E_OUTOFMEMORY. This is an intentional behavioral improvement.
+        // No #if DEBUG validation: GetCodeNotification is a read, but both cDAC and
+        // legacy DAC allocate the table on-demand when called, which would cause
+        // dual-allocation. Validation is safe at a higher layer when a dump is used.
 
         return hr;
     }

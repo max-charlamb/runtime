@@ -259,11 +259,11 @@ public class CodeNotificationsTests
     }
 
     [Fact]
-    public void GetCodeNotification_NullTable_ReturnsNone()
+    public void GetCodeNotification_NullTable_ThrowsInvalidOperation()
     {
         ICodeNotifications contract = CreateContractWithNullTable();
-        uint result = contract.GetCodeNotification(new TargetPointer(0x1000), 0x0600_0001);
-        Assert.Equal(CLRDATA_METHNOTIFY_NONE, result);
+        Assert.Throws<InvalidOperationException>(() =>
+            contract.GetCodeNotification(new TargetPointer(0x1000), 0x0600_0001));
     }
 
     [Fact]

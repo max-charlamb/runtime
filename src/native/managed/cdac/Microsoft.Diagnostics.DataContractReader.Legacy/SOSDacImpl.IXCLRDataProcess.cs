@@ -766,8 +766,9 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
             hr = ex.HResult;
         }
 
-        // No #if DEBUG validation: on Windows, when g_pNotificationTable is NULL,
-        // the cDAC returns S_OK with NONE while the legacy DAC returns E_OUTOFMEMORY.
+        // No #if DEBUG validation: GetCodeNotifications is a read, but both cDAC and
+        // legacy DAC allocate the table on-demand when called, which would cause
+        // dual-allocation. Validation is safe at a higher layer when a dump is used.
 
         return hr;
     }
@@ -808,6 +809,12 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
                     throw new ArgumentException();
                 singleModuleAddr = singleCdm.Address;
             }
+
+            // Matches the legacy DAC (daccess.cpp): reject upfront if the request
+            // cannot possibly fit in the total table capacity. Prevents partial writes
+            // when the table overflows mid-loop.
+            if (numTokens > _target.Contracts.CodeNotifications.GetCodeNotificationCapacity())
+                throw new InvalidOperationException("Request exceeds JIT notification table capacity");
 
             for (uint i = 0; i < numTokens; i++)
             {
