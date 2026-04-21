@@ -147,19 +147,21 @@ public static class TargetFieldExtensions
     /// <summary>
     /// Write a primitive integer field to the target with type validation.
     /// </summary>
-    public static void WriteField<T>(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, T value)
+    public static T WriteField<T>(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, T value)
         where T : unmanaged, IBinaryInteger<T>, IMinMaxValue<T>
     {
         Target.FieldInfo field = typeInfo.Fields[fieldName];
         AssertPrimitiveType<T>(field, fieldName);
 
         target.Write<T>(address + (ulong)field.Offset, value);
+        return value;
     }
 
     /// <summary>
     /// Write a native unsigned integer field to the target with type validation.
+    /// Returns the value written for convenient single-line backing-field updates.
     /// </summary>
-    public static void WriteNUIntField(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, TargetNUInt value)
+    public static TargetNUInt WriteNUIntField(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, TargetNUInt value)
     {
         Target.FieldInfo field = typeInfo.Fields[fieldName];
         Debug.Assert(
@@ -171,12 +173,14 @@ public static class TargetFieldExtensions
             target.Write<ulong>(addr, value.Value);
         else
             target.Write<uint>(addr, (uint)value.Value);
+        return value;
     }
 
     /// <summary>
     /// Write a pointer field to the target with type validation.
+    /// Returns the value written for convenient single-line backing-field updates.
     /// </summary>
-    public static void WritePointerField(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, TargetPointer value)
+    public static TargetPointer WritePointerField(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, TargetPointer value)
     {
         Target.FieldInfo field = typeInfo.Fields[fieldName];
         AssertPointerType(field, fieldName);
@@ -186,6 +190,7 @@ public static class TargetFieldExtensions
             target.Write<ulong>(addr, value.Value);
         else
             target.Write<uint>(addr, (uint)value.Value);
+        return value;
     }
 
     [Conditional("DEBUG")]

@@ -30,31 +30,19 @@ internal sealed class JITNotification : IData<JITNotification>
     public ushort State
     {
         get => _state;
-        set
-        {
-            _target.WriteField(_address, _type, nameof(State), value);
-            _state = value;
-        }
+        set => _state = _target.WriteField(_address, _type, nameof(State), value);
     }
 
     public TargetNUInt ClrModule
     {
         get => _clrModule;
-        set
-        {
-            _target.WriteNUIntField(_address, _type, nameof(ClrModule), value);
-            _clrModule = value;
-        }
+        set => _clrModule = _target.WriteNUIntField(_address, _type, nameof(ClrModule), value);
     }
 
     public uint MethodToken
     {
         get => _methodToken;
-        set
-        {
-            _target.WriteField(_address, _type, nameof(MethodToken), value);
-            _methodToken = value;
-        }
+        set => _methodToken = _target.WriteField(_address, _type, nameof(MethodToken), value);
     }
 
     public bool IsFree => _state == 0;
