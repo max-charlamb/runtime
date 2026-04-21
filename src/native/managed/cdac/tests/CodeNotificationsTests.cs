@@ -10,10 +10,6 @@ namespace Microsoft.Diagnostics.DataContractReader.Tests;
 
 public class CodeNotificationsTests
 {
-    private const uint CLRDATA_METHNOTIFY_NONE = 0;
-    private const uint CLRDATA_METHNOTIFY_GENERATED = 1;
-    private const uint CLRDATA_METHNOTIFY_DISCARDED = 2;
-
     // JITNotification struct layout for 64-bit LE:
     //   offset 0: state (ushort, 2 bytes)
     //   offset 2: 6 bytes padding
@@ -87,10 +83,10 @@ public class CodeNotificationsTests
         TargetPointer module = new(0xAABB_CCDD);
         uint token = 0x0600_0001;
 
-        contract.SetCodeNotification(module, token, CLRDATA_METHNOTIFY_GENERATED);
+        contract.SetCodeNotification(module, token, CodeNotificationKind.Generated);
 
-        uint result = contract.GetCodeNotification(module, token);
-        Assert.Equal(CLRDATA_METHNOTIFY_GENERATED, result);
+        CodeNotificationKind result = contract.GetCodeNotification(module, token);
+        Assert.Equal(CodeNotificationKind.Generated, result);
     }
 
     [Fact]
@@ -100,8 +96,8 @@ public class CodeNotificationsTests
         TargetPointer module = new(0xDEAD);
         uint token = 0x0600_9999;
 
-        uint result = contract.GetCodeNotification(module, token);
-        Assert.Equal(CLRDATA_METHNOTIFY_NONE, result);
+        CodeNotificationKind result = contract.GetCodeNotification(module, token);
+        Assert.Equal(CodeNotificationKind.None, result);
     }
 
     [Fact]
@@ -111,11 +107,11 @@ public class CodeNotificationsTests
         TargetPointer module = new(0x1234);
         uint token = 0x0600_0001;
 
-        contract.SetCodeNotification(module, token, CLRDATA_METHNOTIFY_GENERATED);
-        Assert.Equal(CLRDATA_METHNOTIFY_GENERATED, contract.GetCodeNotification(module, token));
+        contract.SetCodeNotification(module, token, CodeNotificationKind.Generated);
+        Assert.Equal(CodeNotificationKind.Generated, contract.GetCodeNotification(module, token));
 
-        contract.SetCodeNotification(module, token, CLRDATA_METHNOTIFY_DISCARDED);
-        Assert.Equal(CLRDATA_METHNOTIFY_DISCARDED, contract.GetCodeNotification(module, token));
+        contract.SetCodeNotification(module, token, CodeNotificationKind.Discarded);
+        Assert.Equal(CodeNotificationKind.Discarded, contract.GetCodeNotification(module, token));
     }
 
     [Fact]
@@ -125,11 +121,11 @@ public class CodeNotificationsTests
         TargetPointer module = new(0x1234);
         uint token = 0x0600_0001;
 
-        contract.SetCodeNotification(module, token, CLRDATA_METHNOTIFY_GENERATED);
-        Assert.Equal(CLRDATA_METHNOTIFY_GENERATED, contract.GetCodeNotification(module, token));
+        contract.SetCodeNotification(module, token, CodeNotificationKind.Generated);
+        Assert.Equal(CodeNotificationKind.Generated, contract.GetCodeNotification(module, token));
 
-        contract.SetCodeNotification(module, token, CLRDATA_METHNOTIFY_NONE);
-        Assert.Equal(CLRDATA_METHNOTIFY_NONE, contract.GetCodeNotification(module, token));
+        contract.SetCodeNotification(module, token, CodeNotificationKind.None);
+        Assert.Equal(CodeNotificationKind.None, contract.GetCodeNotification(module, token));
     }
 
     [Fact]
@@ -141,22 +137,11 @@ public class CodeNotificationsTests
         uint token1 = 0x0600_0001;
         uint token2 = 0x0600_0002;
 
-        contract.SetCodeNotification(module1, token1, CLRDATA_METHNOTIFY_GENERATED);
-        contract.SetCodeNotification(module2, token2, CLRDATA_METHNOTIFY_DISCARDED);
+        contract.SetCodeNotification(module1, token1, CodeNotificationKind.Generated);
+        contract.SetCodeNotification(module2, token2, CodeNotificationKind.Discarded);
 
-        Assert.Equal(CLRDATA_METHNOTIFY_GENERATED, contract.GetCodeNotification(module1, token1));
-        Assert.Equal(CLRDATA_METHNOTIFY_DISCARDED, contract.GetCodeNotification(module2, token2));
-    }
-
-    [Fact]
-    public void SetCodeNotification_InvalidFlags_Throws()
-    {
-        ICodeNotifications contract = CreateContractWithJITTable();
-        TargetPointer module = new(0x1234);
-        uint token = 0x0600_0001;
-
-        Assert.Throws<ArgumentException>(() =>
-            contract.SetCodeNotification(module, token, 0x4));
+        Assert.Equal(CodeNotificationKind.Generated, contract.GetCodeNotification(module1, token1));
+        Assert.Equal(CodeNotificationKind.Discarded, contract.GetCodeNotification(module2, token2));
     }
 
     [Fact]
@@ -167,13 +152,13 @@ public class CodeNotificationsTests
         uint token1 = 0x0600_0001;
         uint token2 = 0x0600_0002;
 
-        contract.SetCodeNotification(module, token1, CLRDATA_METHNOTIFY_GENERATED);
-        contract.SetCodeNotification(module, token2, CLRDATA_METHNOTIFY_GENERATED);
+        contract.SetCodeNotification(module, token1, CodeNotificationKind.Generated);
+        contract.SetCodeNotification(module, token2, CodeNotificationKind.Generated);
 
-        contract.SetAllCodeNotifications(TargetPointer.Null, CLRDATA_METHNOTIFY_NONE);
+        contract.SetAllCodeNotifications(TargetPointer.Null, CodeNotificationKind.None);
 
-        Assert.Equal(CLRDATA_METHNOTIFY_NONE, contract.GetCodeNotification(module, token1));
-        Assert.Equal(CLRDATA_METHNOTIFY_NONE, contract.GetCodeNotification(module, token2));
+        Assert.Equal(CodeNotificationKind.None, contract.GetCodeNotification(module, token1));
+        Assert.Equal(CodeNotificationKind.None, contract.GetCodeNotification(module, token2));
     }
 
     [Fact]
@@ -184,13 +169,13 @@ public class CodeNotificationsTests
         TargetPointer module2 = new(0x2000);
         uint token = 0x0600_0001;
 
-        contract.SetCodeNotification(module1, token, CLRDATA_METHNOTIFY_GENERATED);
-        contract.SetCodeNotification(module2, token, CLRDATA_METHNOTIFY_GENERATED);
+        contract.SetCodeNotification(module1, token, CodeNotificationKind.Generated);
+        contract.SetCodeNotification(module2, token, CodeNotificationKind.Generated);
 
-        contract.SetAllCodeNotifications(module1, CLRDATA_METHNOTIFY_NONE);
+        contract.SetAllCodeNotifications(module1, CodeNotificationKind.None);
 
-        Assert.Equal(CLRDATA_METHNOTIFY_NONE, contract.GetCodeNotification(module1, token));
-        Assert.Equal(CLRDATA_METHNOTIFY_GENERATED, contract.GetCodeNotification(module2, token));
+        Assert.Equal(CodeNotificationKind.None, contract.GetCodeNotification(module1, token));
+        Assert.Equal(CodeNotificationKind.Generated, contract.GetCodeNotification(module2, token));
     }
 
     [Fact]
@@ -201,13 +186,13 @@ public class CodeNotificationsTests
         uint token1 = 0x0600_0001;
         uint token2 = 0x0600_0002;
 
-        contract.SetCodeNotification(module, token1, CLRDATA_METHNOTIFY_GENERATED);
-        contract.SetCodeNotification(module, token2, CLRDATA_METHNOTIFY_GENERATED);
+        contract.SetCodeNotification(module, token1, CodeNotificationKind.Generated);
+        contract.SetCodeNotification(module, token2, CodeNotificationKind.Generated);
 
-        contract.SetAllCodeNotifications(TargetPointer.Null, CLRDATA_METHNOTIFY_DISCARDED);
+        contract.SetAllCodeNotifications(TargetPointer.Null, CodeNotificationKind.Discarded);
 
-        Assert.Equal(CLRDATA_METHNOTIFY_DISCARDED, contract.GetCodeNotification(module, token1));
-        Assert.Equal(CLRDATA_METHNOTIFY_DISCARDED, contract.GetCodeNotification(module, token2));
+        Assert.Equal(CodeNotificationKind.Discarded, contract.GetCodeNotification(module, token1));
+        Assert.Equal(CodeNotificationKind.Discarded, contract.GetCodeNotification(module, token2));
     }
 
     [Fact]
@@ -269,14 +254,14 @@ public class CodeNotificationsTests
     public void SetAllCodeNotifications_NullTable_NoOp()
     {
         ICodeNotifications contract = CreateContractWithNullTable();
-        contract.SetAllCodeNotifications(TargetPointer.Null, CLRDATA_METHNOTIFY_NONE);
+        contract.SetAllCodeNotifications(TargetPointer.Null, CodeNotificationKind.None);
     }
 
     [Fact]
     public void SetCodeNotification_NullTable_ClearIsNoOp()
     {
         ICodeNotifications contract = CreateContractWithNullTable();
-        contract.SetCodeNotification(new TargetPointer(0x1000), 0x0600_0001, CLRDATA_METHNOTIFY_NONE);
+        contract.SetCodeNotification(new TargetPointer(0x1000), 0x0600_0001, CodeNotificationKind.None);
     }
 
     [Fact]
@@ -284,7 +269,7 @@ public class CodeNotificationsTests
     {
         ICodeNotifications contract = CreateContractWithNullTable(allocateMemory: null);
         Assert.Throws<NotSupportedException>(() =>
-            contract.SetCodeNotification(new TargetPointer(0x1000), 0x0600_0001, CLRDATA_METHNOTIFY_GENERATED));
+            contract.SetCodeNotification(new TargetPointer(0x1000), 0x0600_0001, CodeNotificationKind.Generated));
     }
 
     [Fact]
@@ -338,9 +323,9 @@ public class CodeNotificationsTests
         TargetPointer module = new(0xAABB_CCDD);
         uint token = 0x0600_0001;
 
-        contract.SetCodeNotification(module, token, CLRDATA_METHNOTIFY_GENERATED);
+        contract.SetCodeNotification(module, token, CodeNotificationKind.Generated);
 
-        uint result = contract.GetCodeNotification(module, token);
-        Assert.Equal(CLRDATA_METHNOTIFY_GENERATED, result);
+        CodeNotificationKind result = contract.GetCodeNotification(module, token);
+        Assert.Equal(CodeNotificationKind.Generated, result);
     }
 }

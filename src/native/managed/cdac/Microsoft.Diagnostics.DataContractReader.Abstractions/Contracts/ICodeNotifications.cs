@@ -20,17 +20,17 @@ public interface ICodeNotifications : IContract
     /// If the in-target table has not been allocated yet, lazily allocates it when
     /// <paramref name="flags"/> is non-zero.
     /// </summary>
-    void SetCodeNotification(TargetPointer module, uint methodToken, uint flags) => throw new NotImplementedException();
+    void SetCodeNotification(TargetPointer module, uint methodToken, CodeNotificationKind flags) => throw new NotImplementedException();
 
     /// <summary>
     /// Get the notification flags for a single (module, methodToken) pair.
     /// </summary>
-    uint GetCodeNotification(TargetPointer module, uint methodToken) => throw new NotImplementedException();
+    CodeNotificationKind GetCodeNotification(TargetPointer module, uint methodToken) => throw new NotImplementedException();
 
     /// <summary>
     /// Set notification flags for all methods in a module, or all methods if module is null.
     /// </summary>
-    void SetAllCodeNotifications(TargetPointer module, uint flags) => throw new NotImplementedException();
+    void SetAllCodeNotifications(TargetPointer module, CodeNotificationKind flags) => throw new NotImplementedException();
 
     /// <summary>
     /// Returns the total capacity of the JIT notification table (the maximum number of entries

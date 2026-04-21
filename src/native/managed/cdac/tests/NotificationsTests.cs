@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
-using System.Collections.Generic;
 using Microsoft.Diagnostics.DataContractReader.Contracts;
 using Xunit;
 
@@ -158,3 +157,4 @@ public class NotificationsTests
         Assert.Equal(expectedOffset, catcherEnter.NativeOffset);
     }
 }
+

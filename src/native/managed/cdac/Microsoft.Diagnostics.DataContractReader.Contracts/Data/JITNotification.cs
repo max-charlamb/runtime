@@ -8,62 +8,68 @@ internal sealed class JITNotification : IData<JITNotification>
     static JITNotification IData<JITNotification>.Create(Target target, TargetPointer address)
         => new JITNotification(target, address);
 
+    private readonly Target _target;
+    private readonly Target.TypeInfo _type;
     private readonly TargetPointer _address;
+
+    private ushort _state;
+    private TargetNUInt _clrModule;
+    private uint _methodToken;
 
     public JITNotification(Target target, TargetPointer address)
     {
+        _target = target;
+        _type = target.GetTypeInfo(DataType.JITNotification);
         _address = address;
-        Target.TypeInfo type = target.GetTypeInfo(DataType.JITNotification);
 
-        State = target.ReadField<ushort>(address, type, nameof(State));
-        ClrModule = target.ReadNUIntField(address, type, nameof(ClrModule));
-        MethodToken = target.ReadField<uint>(address, type, nameof(MethodToken));
+        _state = target.ReadField<ushort>(address, _type, nameof(State));
+        _clrModule = target.ReadNUIntField(address, _type, nameof(ClrModule));
+        _methodToken = target.ReadField<uint>(address, _type, nameof(MethodToken));
     }
 
-    public ushort State { get; private set; }
-    public TargetNUInt ClrModule { get; private set; }
-    public uint MethodToken { get; private set; }
-
-    public bool IsFree => State == 0;
-
-    public void WriteState(Target target, ushort state)
+    public ushort State
     {
-        Target.TypeInfo type = target.GetTypeInfo(DataType.JITNotification);
-        ulong addr = _address + (ulong)type.Fields[nameof(State)].Offset;
-        target.Write<ushort>(addr, state);
-        State = state;
+        get => _state;
+        set
+        {
+            _target.WriteField(_address, _type, nameof(State), value);
+            _state = value;
+        }
     }
 
-    public void WriteClrModule(Target target, TargetPointer module)
+    public TargetNUInt ClrModule
     {
-        Target.TypeInfo type = target.GetTypeInfo(DataType.JITNotification);
-        ulong addr = _address + (ulong)type.Fields[nameof(ClrModule)].Offset;
-        if (target.PointerSize == 8)
-            target.Write<ulong>(addr, module.Value);
-        else
-            target.Write<uint>(addr, (uint)module.Value);
+        get => _clrModule;
+        set
+        {
+            _target.WriteNUIntField(_address, _type, nameof(ClrModule), value);
+            _clrModule = value;
+        }
+    }
+
+    public uint MethodToken
+    {
+        get => _methodToken;
+        set
+        {
+            _target.WriteField(_address, _type, nameof(MethodToken), value);
+            _methodToken = value;
+        }
+    }
+
+    public bool IsFree => _state == 0;
+
+    public void Clear()
+    {
+        State = 0;
+        ClrModule = new TargetNUInt(0);
+        MethodToken = 0;
+    }
+
+    public void WriteEntry(TargetPointer module, uint methodToken, ushort state)
+    {
         ClrModule = new TargetNUInt(module.Value);
-    }
-
-    public void WriteMethodToken(Target target, uint methodToken)
-    {
-        Target.TypeInfo type = target.GetTypeInfo(DataType.JITNotification);
-        ulong addr = _address + (ulong)type.Fields[nameof(MethodToken)].Offset;
-        target.Write<uint>(addr, methodToken);
         MethodToken = methodToken;
-    }
-
-    public void Clear(Target target)
-    {
-        WriteState(target, 0);
-        WriteClrModule(target, TargetPointer.Null);
-        WriteMethodToken(target, 0);
-    }
-
-    public void WriteEntry(Target target, TargetPointer module, uint methodToken, ushort state)
-    {
-        WriteClrModule(target, module);
-        WriteMethodToken(target, methodToken);
-        WriteState(target, state);
+        State = state;
     }
 }

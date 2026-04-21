@@ -144,6 +144,50 @@ public static class TargetFieldExtensions
         return target.ProcessedData.GetOrAdd<T>(pointer);
     }
 
+    /// <summary>
+    /// Write a primitive integer field to the target with type validation.
+    /// </summary>
+    public static void WriteField<T>(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, T value)
+        where T : unmanaged, IBinaryInteger<T>, IMinMaxValue<T>
+    {
+        Target.FieldInfo field = typeInfo.Fields[fieldName];
+        AssertPrimitiveType<T>(field, fieldName);
+
+        target.Write<T>(address + (ulong)field.Offset, value);
+    }
+
+    /// <summary>
+    /// Write a native unsigned integer field to the target with type validation.
+    /// </summary>
+    public static void WriteNUIntField(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, TargetNUInt value)
+    {
+        Target.FieldInfo field = typeInfo.Fields[fieldName];
+        Debug.Assert(
+            field.TypeName is null or "" or "nuint",
+            $"Type mismatch writing field '{fieldName}': declared as '{field.TypeName}', expected nuint");
+
+        ulong addr = address + (ulong)field.Offset;
+        if (target.PointerSize == 8)
+            target.Write<ulong>(addr, value.Value);
+        else
+            target.Write<uint>(addr, (uint)value.Value);
+    }
+
+    /// <summary>
+    /// Write a pointer field to the target with type validation.
+    /// </summary>
+    public static void WritePointerField(this Target target, ulong address, Target.TypeInfo typeInfo, string fieldName, TargetPointer value)
+    {
+        Target.FieldInfo field = typeInfo.Fields[fieldName];
+        AssertPointerType(field, fieldName);
+
+        ulong addr = address + (ulong)field.Offset;
+        if (target.PointerSize == 8)
+            target.Write<ulong>(addr, value.Value);
+        else
+            target.Write<uint>(addr, (uint)value.Value);
+    }
+
     [Conditional("DEBUG")]
     private static void AssertPrimitiveType<T>(Target.FieldInfo field, string fieldName)
         where T : unmanaged, IBinaryInteger<T>, IMinMaxValue<T>

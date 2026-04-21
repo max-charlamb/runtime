@@ -118,15 +118,7 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
             if (flags is null)
                 throw new ArgumentNullException(nameof(flags));
 
-            *flags = _target.Contracts.CodeNotifications.GetCodeNotification(_module, _token);
-        }
-        catch (System.InvalidOperationException)
-        {
-            hr = HResults.E_OUTOFMEMORY;
-        }
-        catch (System.ArgumentNullException)
-        {
-            hr = HResults.E_INVALIDARG;
+            *flags = (uint)_target.Contracts.CodeNotifications.GetCodeNotification(_module, _token);
         }
         catch (System.Exception ex)
         {
@@ -145,15 +137,10 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
         int hr = HResults.S_OK;
         try
         {
-            _target.Contracts.CodeNotifications.SetCodeNotification(_module, _token, flags);
-        }
-        catch (System.ArgumentException)
-        {
-            hr = HResults.E_INVALIDARG;
-        }
-        catch (System.InvalidOperationException)
-        {
-            hr = HResults.E_OUTOFMEMORY;
+            if (!IsValidMethodCodeNotification(flags))
+                throw new ArgumentException("Invalid code notification flags", nameof(flags));
+
+            _target.Contracts.CodeNotifications.SetCodeNotification(_module, _token, (CodeNotificationKind)flags);
         }
         catch (System.Exception ex)
         {
@@ -165,6 +152,13 @@ public sealed unsafe partial class ClrDataMethodDefinition : IXCLRDataMethodDefi
         // g_pNotificationTable via AllocVirtual, causing dual-write corruption.
 
         return hr;
+    }
+
+    private static bool IsValidMethodCodeNotification(uint flags)
+    {
+        const uint all = (uint)(CLRDataMethodCodeNotification.CLRDATA_METHNOTIFY_GENERATED
+                              | CLRDataMethodCodeNotification.CLRDATA_METHNOTIFY_DISCARDED);
+        return (flags & ~all) == 0;
     }
 
     int IXCLRDataMethodDefinition.Request(uint reqCode, uint inBufferSize, byte* inBuffer, uint outBufferSize, byte* outBuffer)
