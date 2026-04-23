@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Microsoft.Diagnostics.DataContractReader.Contracts;
+
 namespace Microsoft.Diagnostics.DataContractReader.Data;
 
 internal sealed class String : IData<String>
@@ -10,12 +12,12 @@ internal sealed class String : IData<String>
 
     public String(Target target, TargetPointer address)
     {
-        Target.TypeInfo type = target.GetTypeInfo(DataType.String);
+        ManagedTypeInfo type = target.Contracts.ManagedTypeLayout.GetTypeInfo("System", "String");
 
-        FirstChar = address + (ulong)type.Fields["m_FirstChar"].Offset;
-        StringLength = target.ReadField<uint>(address, type, "m_StringLength");
+        FirstChar = address + (ulong)type.Layout.Fields["_firstChar"].Offset;
+        StringLength = target.ReadField<int>(address, type, "_stringLength");
     }
 
     public TargetPointer FirstChar { get; init; }
-    public uint StringLength { get; init; }
+    public int StringLength { get; init; }
 }

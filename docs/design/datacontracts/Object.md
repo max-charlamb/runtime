@@ -29,11 +29,13 @@ Data descriptors used:
 | --- | --- | --- |
 | `Array` | `m_NumComponents` | Number of items in the array |
 | `Object` | `m_pMethTab` | Method table for the object |
-| `String` | `m_FirstChar` | First character of the string - `m_StringLength` can be used to read the full string (encoded in UTF-16) |
-| `String` | `m_StringLength` | Length of the string in characters (encoded in UTF-16) |
 | `SyncTableEntry` | `SyncBlock` | `SyncBlock` corresponding to the entry |
 | `ObjectHeader` | `SyncBlockValue` | Sync block value from the object header |
 | `SyncBlock` | `HashCode` | Hash code stored in the sync block |
+
+The field offsets for the managed `System.String` type (`_firstChar` and
+`_stringLength`) are resolved via the [`ManagedTypeLayout`](ManagedTypeLayout.md)
+contract rather than from native data descriptors.
 
 Global variables used:
 | Global Name | Type | Purpose |
@@ -52,6 +54,7 @@ Global variables used:
 Contracts used:
 | Contract Name |
 | --- |
+| `ManagedTypeLayout` |
 | `RuntimeTypeSystem` |
 | `SyncBlock` |
 

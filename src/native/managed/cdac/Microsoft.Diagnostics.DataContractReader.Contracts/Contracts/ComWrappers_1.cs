@@ -4,7 +4,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Reflection.Metadata;
 using Microsoft.Diagnostics.DataContractReader.Data;
 
 namespace Microsoft.Diagnostics.DataContractReader.Contracts;
@@ -23,10 +22,6 @@ internal struct ComWrappers_1 : IComWrappers
     private const string ListSizeFieldName = "_size";
     private static readonly Guid IID_IUnknown = new Guid("00000000-0000-0000-C000-000000000046");
     private const int CallerDefinedIUnknown = 1;
-    private TargetPointer? _mowTableAddr = null;
-    private TargetPointer? _nativeObjectWrapperCWTAddr = null;
-    private uint? _listItemsOffset = null;
-    private uint? _listSizeOffset = null;
     private readonly Target _target;
 
     public ComWrappers_1(Target target)
@@ -124,35 +119,21 @@ internal struct ComWrappers_1 : IComWrappers
     public List<TargetPointer> GetMOWs(TargetPointer obj, out bool hasMOWTable)
     {
         hasMOWTable = false;
-        IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
-        if (_mowTableAddr is null)
-        {
-            rts.GetCoreLibFieldDescAndDef(ComWrappersNamespace, ComWrappersName, AllManagedObjectWrapperTableFieldName, out TargetPointer fieldDescAddr, out _);
-            _mowTableAddr = _target.ReadPointer(rts.GetFieldDescStaticAddress(fieldDescAddr));
-        }
+        IManagedTypeLayout ml = _target.Contracts.ManagedTypeLayout;
+        ManagedTypeInfo cwType = ml.GetTypeInfo(ComWrappersNamespace, ComWrappersName);
+        TargetPointer mowTableAddr = _target.ReadPointer(cwType.StaticFields[AllManagedObjectWrapperTableFieldName]);
 
         List<TargetPointer> mows = new List<TargetPointer>();
 
-        if (_mowTableAddr.Value == TargetPointer.Null)
+        if (mowTableAddr == TargetPointer.Null)
             return mows;
         IConditionalWeakTable cwt = _target.Contracts.ConditionalWeakTable;
-        if (cwt.TryGetValue(_mowTableAddr.Value, obj, out TargetPointer mowListObj))
+        if (cwt.TryGetValue(mowTableAddr, obj, out TargetPointer mowListObj))
         {
             hasMOWTable = true;
-            Data.Object listObj = _target.ProcessedData.GetOrAdd<Data.Object>(mowListObj);
-            if (_listItemsOffset is null)
-            {
-                rts.GetCoreLibFieldDescAndDef(ListNamespace, ListName, ListItemsFieldName, out TargetPointer itemsFieldDescAddr, out FieldDefinition itemsFieldDef);
-                _listItemsOffset = rts.GetFieldDescOffset(itemsFieldDescAddr, itemsFieldDef);
-            }
-            TargetPointer listItemsPtr = _target.ReadPointer(listObj.Data + _listItemsOffset.Value);
-
-            if (_listSizeOffset is null)
-            {
-                rts.GetCoreLibFieldDescAndDef(ListNamespace, ListName, ListSizeFieldName, out TargetPointer sizeFieldDescAddr, out FieldDefinition sizeFieldDef);
-                _listSizeOffset = rts.GetFieldDescOffset(sizeFieldDescAddr, sizeFieldDef);
-            }
-            int size = _target.Read<int>(listObj.Data + _listSizeOffset.Value);
+            ManagedTypeInfo listType = ml.GetTypeInfo(ListNamespace, ListName);
+            TargetPointer listItemsPtr = _target.ReadPointerField(mowListObj, listType, ListItemsFieldName);
+            int size = _target.ReadField<int>(mowListObj, listType, ListSizeFieldName);
 
             if (size > 0 && listItemsPtr != TargetPointer.Null)
             {
@@ -185,16 +166,13 @@ internal struct ComWrappers_1 : IComWrappers
 
     public TargetPointer GetComWrappersRCWForObject(TargetPointer obj)
     {
-        IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
-        if (_nativeObjectWrapperCWTAddr is null)
-        {
-            rts.GetCoreLibFieldDescAndDef(ComWrappersNamespace, ComWrappersName, NativeObjectWrapperCWTFieldName, out TargetPointer fieldDescAddr, out _);
-            _nativeObjectWrapperCWTAddr = _target.ReadPointer(rts.GetFieldDescStaticAddress(fieldDescAddr));
-        }
-        if (_nativeObjectWrapperCWTAddr.Value == TargetPointer.Null)
+        IManagedTypeLayout ml = _target.Contracts.ManagedTypeLayout;
+        ManagedTypeInfo cwType = ml.GetTypeInfo(ComWrappersNamespace, ComWrappersName);
+        TargetPointer nativeObjectWrapperCWTAddr = _target.ReadPointer(cwType.StaticFields[NativeObjectWrapperCWTFieldName]);
+        if (nativeObjectWrapperCWTAddr == TargetPointer.Null)
             return TargetPointer.Null;
         IConditionalWeakTable cwt = _target.Contracts.ConditionalWeakTable;
-        _ = cwt.TryGetValue(_nativeObjectWrapperCWTAddr.Value, obj, out TargetPointer rcw);
+        _ = cwt.TryGetValue(nativeObjectWrapperCWTAddr, obj, out TargetPointer rcw);
         return rcw;
     }
 }

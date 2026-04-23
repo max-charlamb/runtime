@@ -13,8 +13,8 @@ bool TryGetValue(TargetPointer conditionalWeakTable, TargetPointer key, out Targ
 ## Version 1
 
 This contract reads the field layout of `ConditionalWeakTable<TKey, TValue>` and its nested types
-(`Container`, `Container+Entry`) via the `RuntimeTypeSystem` contract rather than cDAC data descriptors.
-Field offsets are resolved by name at runtime.
+(`Container`, `Container+Entry`) via the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract
+rather than via cDAC data descriptors. Field offsets are resolved by name at runtime.
 
 Contract constants:
 | Constant | Value | Meaning |
@@ -40,6 +40,7 @@ Contracts used:
 | --- |
 | `Object` |
 | `GC` |
+| `ManagedTypeLayout` |
 | `RuntimeTypeSystem` |
 
 The algorithm looks up the `_container` field of the `ConditionalWeakTable` object, then reads the
@@ -52,28 +53,15 @@ bool TryGetValue(TargetPointer conditionalWeakTable, TargetPointer key, out Targ
 {
     value = TargetPointer.Null;
 
-    // Resolve field offsets by name from CoreLib via RuntimeTypeSystem.
-    // GetCoreLibFieldDescAndDef returns a FieldDesc address and FieldDefinition;
-    // GetFieldDescOffset extracts the byte offset from those.
-    IRuntimeTypeSystem rts = target.Contracts.RuntimeTypeSystem;
+    // Resolve field offsets by name from CoreLib via the ManagedTypeLayout contract.
+    IManagedTypeLayout ml = target.Contracts.ManagedTypeLayout;
 
-    rts.GetCoreLibFieldDescAndDef(CWTNamespace, CWTTypeName, ContainerFieldName, out fd, out fDef);
-    uint containerOffset = rts.GetFieldDescOffset(fd, fDef);
-
-    rts.GetCoreLibFieldDescAndDef(CWTNamespace, ContainerTypeName, BucketsFieldName, out fd, out fDef);
-    uint bucketsOffset = rts.GetFieldDescOffset(fd, fDef);
-
-    rts.GetCoreLibFieldDescAndDef(CWTNamespace, ContainerTypeName, EntriesFieldName, out fd, out fDef);
-    uint entriesOffset = rts.GetFieldDescOffset(fd, fDef);
-
-    rts.GetCoreLibFieldDescAndDef(CWTNamespace, EntryTypeName, HashCodeFieldName, out fd, out fDef);
-    uint hashCodeOffset = rts.GetFieldDescOffset(fd, fDef);
-
-    rts.GetCoreLibFieldDescAndDef(CWTNamespace, EntryTypeName, NextFieldName, out fd, out fDef);
-    uint nextOffset = rts.GetFieldDescOffset(fd, fDef);
-
-    rts.GetCoreLibFieldDescAndDef(CWTNamespace, EntryTypeName, DepHndFieldName, out fd, out fDef);
-    uint depHndOffset = rts.GetFieldDescOffset(fd, fDef);
+    uint containerOffset = ml.GetFieldOffset(CWTNamespace, CWTTypeName, ContainerFieldName);
+    uint bucketsOffset = ml.GetFieldOffset(CWTNamespace, ContainerTypeName, BucketsFieldName);
+    uint entriesOffset = ml.GetFieldOffset(CWTNamespace, ContainerTypeName, EntriesFieldName);
+    uint hashCodeOffset = ml.GetFieldOffset(CWTNamespace, EntryTypeName, HashCodeFieldName);
+    uint nextOffset = ml.GetFieldOffset(CWTNamespace, EntryTypeName, NextFieldName);
+    uint depHndOffset = ml.GetFieldOffset(CWTNamespace, EntryTypeName, DepHndFieldName);
 
     // Navigate from the ConditionalWeakTable object to its container
     TargetPointer container = target.ReadPointer(conditionalWeakTable + /* Object data offset */ + containerOffset);

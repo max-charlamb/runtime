@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Microsoft.Diagnostics.DataContractReader.Contracts;
+
 namespace Microsoft.Diagnostics.DataContractReader.Data;
 
 internal sealed class Exception : IData<Exception>
@@ -10,7 +12,7 @@ internal sealed class Exception : IData<Exception>
 
     public Exception(Target target, TargetPointer address)
     {
-        Target.TypeInfo type = target.GetTypeInfo(DataType.Exception);
+        ManagedTypeInfo type = target.Contracts.ManagedTypeLayout.GetTypeInfo("System", "Exception");
 
         Message = target.ReadPointerField(address, type, "_message");
         InnerException = target.ReadPointerField(address, type, "_innerException");

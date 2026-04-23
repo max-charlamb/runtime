@@ -28,9 +28,6 @@ TargetPointer GetComWrappersRCWForObject(TargetPointer obj);
 Data descriptors used:
 | Data Descriptor Name | Field | Meaning |
 | --- | --- | --- |
-| `NativeObjectWrapperObject` | `ExternalComObject` | Address of the external COM object |
-| `ManagedObjectWrapperHolderObject` | `WrappedObject` | Address of the wrapped object |
-| `ManagedObjectWrapperHolderObject` | `Wrapper` | Pointer to the `ManagedObjectWrapperLayout` |
 | `ManagedObjectWrapperLayout` | `RefCount` | Reference count of the managed object wrapper |
 | `ManagedObjectWrapperLayout` | `Flags` | `CreateComInterfaceFlagsEx` flags |
 | `ManagedObjectWrapperLayout` | `UserDefinedCount` | Number of user-defined COM interface entries |
@@ -39,6 +36,13 @@ Data descriptors used:
 | `ComInterfaceEntry` | `IID` | The interface GUID |
 | `InternalComInterfaceDispatch` | `Entries` | Start of vtable entry pointers within the dispatch block |
 | `ComWrappersVtablePtrs` | `Size` | Size of vtable pointers array |
+
+The managed-side layouts for `ComWrappers+NativeObjectWrapper` (`_externalComObject`)
+and `ComWrappers+ManagedObjectWrapperHolder` (`_wrappedObject`, `_wrapper`) are
+resolved via the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract rather than
+from native data descriptors. The static fields `ComWrappers.s_nativeObjectWrapperTable`
+and `ComWrappers.s_allManagedObjectWrapperTable` are likewise resolved via
+`ManagedTypeLayout.GetStaticFieldAddress`.
 
 Global variables used:
 | Global Name | Type | Purpose |
@@ -57,6 +61,7 @@ Global variables used:
 Contracts used:
 | Contract Name |
 | --- |
+| `ManagedTypeLayout` |
 | `Object` |
 | `RuntimeTypeSystem` |
 | `Loader` |
