@@ -31,8 +31,6 @@ internal struct ConditionalWeakTable_1 : IConditionalWeakTable
         int bucket = hashCode & (int)(bucketCount - 1);
         int entriesIndex = _target.Read<int>(bucketsArray.DataPointer + (ulong)(bucket * sizeof(int)));
 
-        Data.ConditionalWeakTableEntry entry = new Data.ConditionalWeakTableEntry(_target);
-
         // Get entry size from the entries array's component size
         Data.Array entriesArray = _target.ProcessedData.GetOrAdd<Data.Array>(container.Entries);
         IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
@@ -43,22 +41,21 @@ internal struct ConditionalWeakTable_1 : IConditionalWeakTable
         while (entriesIndex != -1)
         {
             TargetPointer entryAddress = entriesArray.DataPointer + (ulong)((uint)entriesIndex * entrySize);
+            Data.ConditionalWeakTableEntry entry = _target.ProcessedData.GetOrAdd<Data.ConditionalWeakTableEntry>(entryAddress);
 
-            int entryHashCode = _target.Read<int>(entryAddress + (ulong)entry.HashCodeOffset);
-            if (entryHashCode == hashCode)
+            if (entry.HashCode == hashCode)
             {
-                TargetPointer depHnd = _target.ReadPointer(entryAddress + (ulong)entry.DepHndOffset);
-                Data.ObjectHandle handle = _target.ProcessedData.GetOrAdd<Data.ObjectHandle>(depHnd);
+                Data.ObjectHandle handle = _target.ProcessedData.GetOrAdd<Data.ObjectHandle>(entry.DepHnd);
                 if (handle.Object == key)
                 {
-                    TargetNUInt extraInfo = _target.Contracts.GC.GetHandleExtraInfo(depHnd);
+                    TargetNUInt extraInfo = _target.Contracts.GC.GetHandleExtraInfo(entry.DepHnd);
                     value = new TargetPointer(extraInfo.Value);
 
                     return true;
                 }
             }
 
-            entriesIndex = _target.Read<int>(entryAddress + (ulong)entry.NextOffset);
+            entriesIndex = entry.Next;
         }
 
         return false;
