@@ -56,10 +56,7 @@ Contracts used:
 | `Object` |
 | `ConditionalWeakTable` |
 
-## Managed Types
-
-Field offsets and static-field addresses for the managed types below are resolved via
-the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
+Managed types used:
 
 | Managed Type | Field | Meaning |
 | --- | --- | --- |

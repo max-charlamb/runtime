@@ -29,10 +29,7 @@ Contracts used:
 | `ManagedTypeLayout` |
 | `RuntimeTypeSystem` |
 
-## Managed Types
-
-Field offsets for the managed types below are resolved via the
-[`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
+Managed types used:
 
 | Managed Type | Field | Meaning |
 | --- | --- | --- |

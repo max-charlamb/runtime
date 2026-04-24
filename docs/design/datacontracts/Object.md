@@ -54,10 +54,7 @@ Contracts used:
 | `RuntimeTypeSystem` |
 | `SyncBlock` |
 
-## Managed Types
-
-Field offsets for the managed type below are resolved via the
-[`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
+Managed types used:
 
 | Managed Type | Field | Meaning |
 | --- | --- | --- |
