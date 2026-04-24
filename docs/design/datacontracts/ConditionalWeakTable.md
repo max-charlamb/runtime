@@ -34,11 +34,14 @@ Contracts used:
 Field offsets for the managed types below are resolved via the
 [`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
 
-| Type (namespace, name) | Fields used |
-| --- | --- |
-| (`System.Runtime.CompilerServices`, ``ConditionalWeakTable`2``) | `_container` |
-| (`System.Runtime.CompilerServices`, ``ConditionalWeakTable`2+Container``) | `_buckets`, `_entries` |
-| (`System.Runtime.CompilerServices`, ``ConditionalWeakTable`2+Entry``) | `HashCode`, `Next`, `depHnd` |
+| Managed Type | Field | Meaning |
+| --- | --- | --- |
+| `System.Runtime.CompilerServices.ConditionalWeakTable\`2` | `_container` | Pointer to the active `Container` holding buckets and entries |
+| `System.Runtime.CompilerServices.ConditionalWeakTable\`2+Container` | `_buckets` | `int[]` buckets array; each slot is an index into `_entries` or `-1` |
+| `System.Runtime.CompilerServices.ConditionalWeakTable\`2+Container` | `_entries` | `Entry[]` storage for the table's entries |
+| `System.Runtime.CompilerServices.ConditionalWeakTable\`2+Entry` | `HashCode` | Hash code of the key (masked to positive int); chain terminator when `-1` |
+| `System.Runtime.CompilerServices.ConditionalWeakTable\`2+Entry` | `Next` | Index of the next entry in the bucket chain, or `-1` |
+| `System.Runtime.CompilerServices.ConditionalWeakTable\`2+Entry` | `depHnd` | Dependent handle tying the key to the value |
 
 The algorithm looks up the `_container` field of the `ConditionalWeakTable` object, then reads the
 `_buckets` and `_entries` fields from the container. It resolves `Entry` field offsets (`HashCode`,

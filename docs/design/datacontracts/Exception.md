@@ -36,9 +36,16 @@ Contracts used:
 Field offsets for the managed type below are resolved via the
 [`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
 
-| Type (namespace, name) | Fields used |
-| --- | --- |
-| (`System`, `Exception`) | `_message`, `_innerException`, `_stackTrace`, `_watsonBuckets`, `_stackTraceString`, `_remoteStackTraceString`, `_HResult`, `_xcode` |
+| Managed Type | Field | Meaning |
+| --- | --- | --- |
+| `System.Exception` | `_message` | Exception message string |
+| `System.Exception` | `_innerException` | Inner exception object |
+| `System.Exception` | `_stackTrace` | Stack trace object captured at throw |
+| `System.Exception` | `_watsonBuckets` | Watson bucket parameters |
+| `System.Exception` | `_stackTraceString` | Stack trace string |
+| `System.Exception` | `_remoteStackTraceString` | Remote stack trace string |
+| `System.Exception` | `_HResult` | HRESULT associated with the exception |
+| `System.Exception` | `_xcode` | OS exception code |
 
 The fields of the managed `System.Exception` type are read from metadata via the
 [`ManagedTypeLayout`](ManagedTypeLayout.md) contract rather than from native data

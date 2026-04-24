@@ -59,9 +59,10 @@ Contracts used:
 Field offsets for the managed type below are resolved via the
 [`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
 
-| Type (namespace, name) | Fields used |
-| --- | --- |
-| (`System`, `String`) | `_stringLength`, `_firstChar` |
+| Managed Type | Field | Meaning |
+| --- | --- | --- |
+| `System.String` | `_stringLength` | Number of characters in the string |
+| `System.String` | `_firstChar` | First character of the string's inline character buffer |
 
 ``` csharp
 TargetPointer GetMethodTableAddress(TargetPointer address)

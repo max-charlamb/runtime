@@ -58,15 +58,19 @@ Contracts used:
 
 ## Managed Types
 
-Field offsets and static-field addresses for the managed types below are resolved
-via the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
+Field offsets and static-field addresses for the managed types below are resolved via
+the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
 
-| Type (namespace, name) | Fields used |
-| --- | --- |
-| (`System.Runtime.InteropServices`, `ComWrappers`) | *statics:* `s_nativeObjectWrapperTable`, `s_allManagedObjectWrapperTable` |
-| (`System.Runtime.InteropServices`, `ComWrappers+NativeObjectWrapper`) | `_externalComObject` (plus `TypeHandle` for the `IsComWrappersRCW` identity check) |
-| (`System.Runtime.InteropServices`, `ComWrappers+ManagedObjectWrapperHolder`) | `_wrappedObject`, `_wrapper` |
-| (`System.Collections.Generic`, ``List`1``) | `_items`, `_size` |
+| Managed Type | Field | Meaning |
+| --- | --- | --- |
+| `System.Runtime.InteropServices.ComWrappers` | `s_nativeObjectWrapperTable` *(static)* | `ConditionalWeakTable<object, NativeObjectWrapper>` mapping managed objects to their RCW |
+| `System.Runtime.InteropServices.ComWrappers` | `s_allManagedObjectWrapperTable` *(static)* | `ConditionalWeakTable<object, List<ManagedObjectWrapperHolder>>` mapping managed objects to all their MOWs |
+| `System.Runtime.InteropServices.ComWrappers+NativeObjectWrapper` | *(type identity)* | Method table used to identify a ComWrappers RCW |
+| `System.Runtime.InteropServices.ComWrappers+NativeObjectWrapper` | `_externalComObject` | External COM object pointer backing the RCW |
+| `System.Runtime.InteropServices.ComWrappers+ManagedObjectWrapperHolder` | `_wrappedObject` | Managed object being wrapped |
+| `System.Runtime.InteropServices.ComWrappers+ManagedObjectWrapperHolder` | `_wrapper` | Pointer to the `ManagedObjectWrapper` native layout |
+| `System.Collections.Generic.List\`1` | `_items` | Backing `T[]` array |
+| `System.Collections.Generic.List\`1` | `_size` | Number of elements currently in the list |
 
 ``` csharp
 
