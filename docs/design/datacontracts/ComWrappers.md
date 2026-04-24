@@ -41,8 +41,9 @@ The managed-side layouts for `ComWrappers+NativeObjectWrapper` (`_externalComObj
 and `ComWrappers+ManagedObjectWrapperHolder` (`_wrappedObject`, `_wrapper`) are
 resolved via the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract rather than
 from native data descriptors. The static fields `ComWrappers.s_nativeObjectWrapperTable`
-and `ComWrappers.s_allManagedObjectWrapperTable` are likewise resolved via
-`ManagedTypeLayout.GetStaticFieldAddress`.
+and `ComWrappers.s_allManagedObjectWrapperTable` are likewise resolved by getting the
+relevant `ManagedTypeInfo` from `ManagedTypeLayout.GetTypeInfo(...)` and looking up
+the field slot address in `ManagedTypeInfo.StaticFields` by name.
 
 Global variables used:
 | Global Name | Type | Purpose |

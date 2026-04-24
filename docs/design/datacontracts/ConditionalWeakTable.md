@@ -45,30 +45,44 @@ Contracts used:
 
 The algorithm looks up the `_container` field of the `ConditionalWeakTable` object, then reads the
 `_buckets` and `_entries` fields from the container. It resolves `Entry` field offsets (`HashCode`,
-`Next`, `depHnd`) via `RuntimeTypeSystem` and determines the entry stride from the entries array's
-component size.
+`Next`, `depHnd`) via the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract and determines the
+entry stride from the entries array's component size.
+
+`ManagedTypeInfo.Layout.Fields[name].Offset` is pre-shifted by `sizeof(Object)`, so for
+reference-type fields read from an object address the canonical `address + field.Offset` idiom
+applies. `Entry` is a value type stored inline in the `Entry[]` element storage (which has no
+object header), so `Entry` field offsets are un-shifted by `sizeof(Object)` before being added to
+the entry's address.
 
 ``` csharp
 bool TryGetValue(TargetPointer conditionalWeakTable, TargetPointer key, out TargetPointer value)
 {
     value = TargetPointer.Null;
 
-    // Resolve field offsets by name from CoreLib via the ManagedTypeLayout contract.
+    // Resolve managed type layouts from CoreLib via the ManagedTypeLayout contract.
     IManagedTypeLayout ml = target.Contracts.ManagedTypeLayout;
+    ManagedTypeInfo cwtType = ml.GetTypeInfo(CWTNamespace, CWTTypeName);
+    ManagedTypeInfo containerType = ml.GetTypeInfo(CWTNamespace, ContainerTypeName);
+    ManagedTypeInfo entryType = ml.GetTypeInfo(CWTNamespace, EntryTypeName);
 
-    uint containerOffset = ml.GetFieldOffset(CWTNamespace, CWTTypeName, ContainerFieldName);
-    uint bucketsOffset = ml.GetFieldOffset(CWTNamespace, ContainerTypeName, BucketsFieldName);
-    uint entriesOffset = ml.GetFieldOffset(CWTNamespace, ContainerTypeName, EntriesFieldName);
-    uint hashCodeOffset = ml.GetFieldOffset(CWTNamespace, EntryTypeName, HashCodeFieldName);
-    uint nextOffset = ml.GetFieldOffset(CWTNamespace, EntryTypeName, NextFieldName);
-    uint depHndOffset = ml.GetFieldOffset(CWTNamespace, EntryTypeName, DepHndFieldName);
+    uint objectSize = target.GetTypeInfo(DataType.Object).Size!.Value;
 
     // Navigate from the ConditionalWeakTable object to its container
-    TargetPointer container = target.ReadPointer(conditionalWeakTable + /* Object data offset */ + containerOffset);
+    //   (reference-type reads: use field.Offset directly on the object address)
+    TargetPointer container = target.ReadPointer(
+        conditionalWeakTable + cwtType.Layout.Fields[ContainerFieldName].Offset);
 
     // Read the container's buckets and entries array pointers
-    TargetPointer bucketsPtr = target.ReadPointer(container + /* Object data offset */ + bucketsOffset);
-    TargetPointer entriesPtr = target.ReadPointer(container + /* Object data offset */ + entriesOffset);
+    TargetPointer bucketsPtr = target.ReadPointer(
+        container + containerType.Layout.Fields[BucketsFieldName].Offset);
+    TargetPointer entriesPtr = target.ReadPointer(
+        container + containerType.Layout.Fields[EntriesFieldName].Offset);
+
+    // Entry is a value type stored inline in the Entry[] (no object header);
+    // un-shift the pre-shifted field offsets by sizeof(Object).
+    uint hashCodeOffset = entryType.Layout.Fields[HashCodeFieldName].Offset - objectSize;
+    uint nextOffset     = entryType.Layout.Fields[NextFieldName].Offset     - objectSize;
+    uint depHndOffset   = entryType.Layout.Fields[DepHndFieldName].Offset   - objectSize;
 
     // Get the runtime default hash code for the key object (returns 0 if none assigned)
     int hashCode = target.Contracts.Object.TryGetHashCode(key);
