@@ -5,11 +5,6 @@ namespace Microsoft.Diagnostics.DataContractReader.Contracts;
 
 internal readonly struct SyncBlock_1 : ISyncBlock
 {
-    private const string LockStateName = "_state";
-    private const string LockOwningThreadIdName = "_owningThreadId";
-    private const string LockRecursionCountName = "_recursionCount";
-    private const string LockName = "Lock";
-    private const string LockNamespace = "System.Threading";
     private readonly Target _target;
     private readonly TargetPointer _syncTableEntries;
     private readonly ulong _syncBlockLinkOffset;
@@ -54,14 +49,12 @@ internal readonly struct SyncBlock_1 : ISyncBlock
 
         if (sb.Lock != null)
         {
-            ManagedTypeInfo lockType = _target.Contracts.ManagedTypeLayout.GetTypeInfo(LockNamespace, LockName);
-            TargetPointer lockObjPtr = sb.Lock.Object;
-            uint state = _target.ReadField<uint>(lockObjPtr, lockType, LockStateName);
-            bool monitorHeld = (state & 1) != 0;
+            Data.Lock lockObj = _target.ProcessedData.GetOrAdd<Data.Lock>(sb.Lock.Object);
+            bool monitorHeld = (lockObj.State & 1) != 0;
             if (monitorHeld)
             {
-                owningThreadId = (uint)_target.ReadField<int>(lockObjPtr, lockType, LockOwningThreadIdName);
-                recursion = _target.ReadField<uint>(lockObjPtr, lockType, LockRecursionCountName);
+                owningThreadId = lockObj.OwningThreadId;
+                recursion = lockObj.RecursionCount;
             }
             return monitorHeld;
         }
