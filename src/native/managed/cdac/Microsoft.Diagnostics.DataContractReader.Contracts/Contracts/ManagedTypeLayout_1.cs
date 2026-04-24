@@ -95,6 +95,7 @@ internal sealed class ManagedTypeLayout_1 : IManagedTypeLayout
 
         info = new ManagedTypeInfo
         {
+            TypeHandle = th,
             Layout = new Target.TypeInfo
             {
                 Size = objectSize,

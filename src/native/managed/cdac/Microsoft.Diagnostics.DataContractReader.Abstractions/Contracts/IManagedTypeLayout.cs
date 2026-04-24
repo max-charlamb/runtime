@@ -30,6 +30,11 @@ public readonly struct ManagedTypeLayout : IManagedTypeLayout
 public readonly record struct ManagedTypeInfo
 {
     /// <summary>
+    /// The runtime <see cref="TypeHandle"/> (MethodTable) for this type.
+    /// </summary>
+    public TypeHandle TypeHandle { get; init; }
+
+    /// <summary>
     /// Instance-field layout. Field offsets are pre-shifted by <c>sizeof(Object)</c> so callers
     /// can use <c>address + field.Offset</c> from the object address.
     /// </summary>
@@ -42,6 +47,7 @@ public readonly record struct ManagedTypeInfo
 
     public ManagedTypeInfo()
     {
+        TypeHandle = default;
         Layout = default;
         StaticFields = new Dictionary<string, TargetPointer>();
     }

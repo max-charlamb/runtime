@@ -7,11 +7,14 @@ namespace Microsoft.Diagnostics.DataContractReader.Data;
 
 internal sealed class NativeObjectWrapperObject : IData<NativeObjectWrapperObject>
 {
+    public const string Namespace = "System.Runtime.InteropServices";
+    public const string Name = "ComWrappers+NativeObjectWrapper";
+
     static NativeObjectWrapperObject IData<NativeObjectWrapperObject>.Create(Target target, TargetPointer address) => new NativeObjectWrapperObject(target, address);
 
     public NativeObjectWrapperObject(Target target, TargetPointer address)
     {
-        ManagedTypeInfo type = target.Contracts.ManagedTypeLayout.GetTypeInfo("System.Runtime.InteropServices", "ComWrappers+NativeObjectWrapper");
+        ManagedTypeInfo type = target.Contracts.ManagedTypeLayout.GetTypeInfo(Namespace, Name);
 
         ExternalComObject = target.ReadPointerField(address, type, "_externalComObject");
     }
