@@ -37,14 +37,6 @@ Data descriptors used:
 | `InternalComInterfaceDispatch` | `Entries` | Start of vtable entry pointers within the dispatch block |
 | `ComWrappersVtablePtrs` | `Size` | Size of vtable pointers array |
 
-The managed-side layouts for `ComWrappers+NativeObjectWrapper` (`_externalComObject`)
-and `ComWrappers+ManagedObjectWrapperHolder` (`_wrappedObject`, `_wrapper`) are
-resolved via the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract rather than
-from native data descriptors. The static fields `ComWrappers.s_nativeObjectWrapperTable`
-and `ComWrappers.s_allManagedObjectWrapperTable` are likewise resolved by getting the
-relevant `ManagedTypeInfo` from `ManagedTypeLayout.GetTypeInfo(...)` and looking up
-the field slot address in `ManagedTypeInfo.StaticFields` by name.
-
 Global variables used:
 | Global Name | Type | Purpose |
 | --- | --- | --- |
@@ -54,8 +46,6 @@ Global variables used:
 ### Contract Constants:
 | Name | Type | Purpose | Value |
 | --- | --- | --- | --- |
-| `NativeObjectWrapperNamespace` | string | Namespace of System.Runtime.InteropServices.ComWrappers+NativeObjectWrapper | `System.Runtime.InteropServices` |
-| `NativeObjectWrapperName` | string | Name of System.Runtime.InteropServices.ComWrappers+NativeObjectWrapper | `ComWrappers+NativeObjectWrapper` |
 | `CallerDefinedIUnknown` | int | Flag bit for `CreateComInterfaceFlagsEx` indicating caller-defined IUnknown | `1` |
 | `IID_IUnknown` | Guid | The IID for IUnknown | `00000000-0000-0000-C000-000000000046` |
 
@@ -64,10 +54,19 @@ Contracts used:
 | --- |
 | `ManagedTypeLayout` |
 | `Object` |
-| `RuntimeTypeSystem` |
-| `Loader` |
 | `ConditionalWeakTable` |
 
+## Managed Types
+
+Field offsets and static-field addresses for the managed types below are resolved
+via the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
+
+| Type (namespace, name) | Fields used |
+| --- | --- |
+| (`System.Runtime.InteropServices`, `ComWrappers`) | *statics:* `s_nativeObjectWrapperTable`, `s_allManagedObjectWrapperTable` |
+| (`System.Runtime.InteropServices`, `ComWrappers+NativeObjectWrapper`) | `_externalComObject` (plus `TypeHandle` for the `IsComWrappersRCW` identity check) |
+| (`System.Runtime.InteropServices`, `ComWrappers+ManagedObjectWrapperHolder`) | `_wrappedObject`, `_wrapper` |
+| (`System.Collections.Generic`, ``List`1``) | `_items`, `_size` |
 
 ``` csharp
 
@@ -163,25 +162,26 @@ public TargetPointer GetIdentityForMOW(TargetPointer mow)
 
 public List<TargetPointer> GetMOWs(TargetPointer obj, out bool hasMOWTable)
 {
-    // Look up the static field ComWrappers.s_allManagedObjectWrapperTable via RuntimeTypeSystem
+    // Look up the static field ComWrappers.s_allManagedObjectWrapperTable via ManagedTypeLayout
     // Use the ConditionalWeakTable contract to find the List<ManagedObjectWrapperHolderObject> value
     // Iterate the list and return each holder's Wrapper pointer (the ManagedObjectWrapperLayout address)
 }
 
 public bool IsComWrappersRCW(TargetPointer rcw)
 {
-    // Get method table from rcw using Object contract GetMethodTableAddress
-    // Find module from the system assembly
-    // Then use RuntimeTypeSystem contract to look up type handle by name/namespace hardcoded in contract
-    // Then compare the rcw method table with the method table found by name/namespace/module
+    TargetPointer mt = target.Contracts.Object.GetMethodTableAddress(rcw);
+    ManagedTypeInfo nativeObjectWrapper = target.Contracts.ManagedTypeLayout.GetTypeInfo(
+        "System.Runtime.InteropServices", "ComWrappers+NativeObjectWrapper");
+    return mt == nativeObjectWrapper.TypeHandle.Address;
 }
 
 public TargetPointer GetComWrappersRCWForObject(TargetPointer obj)
 {
-    // Look up the static field ComWrappers.s_nativeObjectWrapperTable via RuntimeTypeSystem
-    // Use the ConditionalWeakTable contract to find the value associated with obj
-    // If found, return the NativeObjectWrapper reference (tagged with low bit by caller)
-    TargetPointer cwtTable = /* address of ComWrappers.s_nativeObjectWrapperTable static field */;
+    // Look up the static field ComWrappers.s_nativeObjectWrapperTable via ManagedTypeLayout.
+    // Use the ConditionalWeakTable contract to find the value associated with obj.
+    ManagedTypeInfo cw = target.Contracts.ManagedTypeLayout.GetTypeInfo(
+        "System.Runtime.InteropServices", "ComWrappers");
+    TargetPointer cwtTable = target.ReadPointer(cw.StaticFields["s_nativeObjectWrapperTable"]);
     if (cwtTable == TargetPointer.Null)
         return TargetPointer.Null;
 

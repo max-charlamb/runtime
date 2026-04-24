@@ -16,20 +16,6 @@ This contract reads the field layout of `ConditionalWeakTable<TKey, TValue>` and
 (`Container`, `Container+Entry`) via the [`ManagedTypeLayout`](ManagedTypeLayout.md) contract
 rather than via cDAC data descriptors. Field offsets are resolved by name at runtime.
 
-Contract constants:
-| Constant | Value | Meaning |
-| --- | --- | --- |
-| `CWTNamespace` | `System.Runtime.CompilerServices` | Namespace of the `ConditionalWeakTable` type |
-| `CWTTypeName` | ``ConditionalWeakTable`2`` | Name of the `ConditionalWeakTable<TKey, TValue>` type |
-| `ContainerTypeName` | ``ConditionalWeakTable`2+Container`` | Name of the nested `Container` type |
-| `EntryTypeName` | ``ConditionalWeakTable`2+Entry`` | Name of the nested `Entry` value type |
-| `ContainerFieldName` | `_container` | Field on `ConditionalWeakTable` pointing to the active container |
-| `BucketsFieldName` | `_buckets` | Field on `Container` pointing to the `int[]` buckets array |
-| `EntriesFieldName` | `_entries` | Field on `Container` pointing to the `Entry[]` entries array |
-| `HashCodeFieldName` | `HashCode` | Field on `Entry` storing the hash code (masked to positive int) |
-| `NextFieldName` | `Next` | Field on `Entry` storing the next index in the chain, or -1 |
-| `DepHndFieldName` | `depHnd` | Field on `Entry` storing the dependent handle |
-
 Data descriptors used:
 | Data Descriptor Name | Field | Meaning |
 | --- | --- | --- |
@@ -42,6 +28,17 @@ Contracts used:
 | `GC` |
 | `ManagedTypeLayout` |
 | `RuntimeTypeSystem` |
+
+## Managed Types
+
+Field offsets for the managed types below are resolved via the
+[`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
+
+| Type (namespace, name) | Fields used |
+| --- | --- |
+| (`System.Runtime.CompilerServices`, ``ConditionalWeakTable`2``) | `_container` |
+| (`System.Runtime.CompilerServices`, ``ConditionalWeakTable`2+Container``) | `_buckets`, `_entries` |
+| (`System.Runtime.CompilerServices`, ``ConditionalWeakTable`2+Entry``) | `HashCode`, `Next`, `depHnd` |
 
 The algorithm looks up the `_container` field of the `ConditionalWeakTable` object, then reads the
 `_buckets` and `_entries` fields from the container. It resolves `Entry` field offsets (`HashCode`,
@@ -61,28 +58,29 @@ bool TryGetValue(TargetPointer conditionalWeakTable, TargetPointer key, out Targ
 
     // Resolve managed type layouts from CoreLib via the ManagedTypeLayout contract.
     IManagedTypeLayout ml = target.Contracts.ManagedTypeLayout;
-    ManagedTypeInfo cwtType = ml.GetTypeInfo(CWTNamespace, CWTTypeName);
-    ManagedTypeInfo containerType = ml.GetTypeInfo(CWTNamespace, ContainerTypeName);
-    ManagedTypeInfo entryType = ml.GetTypeInfo(CWTNamespace, EntryTypeName);
+    IRuntimeTypeSystem rts = target.Contracts.RuntimeTypeSystem;
+    ManagedTypeInfo cwtType = ml.GetTypeInfo("System.Runtime.CompilerServices", "ConditionalWeakTable`2");
+    ManagedTypeInfo containerType = ml.GetTypeInfo("System.Runtime.CompilerServices", "ConditionalWeakTable`2+Container");
+    ManagedTypeInfo entryType = ml.GetTypeInfo("System.Runtime.CompilerServices", "ConditionalWeakTable`2+Entry");
 
     uint objectSize = target.GetTypeInfo(DataType.Object).Size!.Value;
 
     // Navigate from the ConditionalWeakTable object to its container
     //   (reference-type reads: use field.Offset directly on the object address)
     TargetPointer container = target.ReadPointer(
-        conditionalWeakTable + cwtType.Layout.Fields[ContainerFieldName].Offset);
+        conditionalWeakTable + cwtType.Layout.Fields["_container"].Offset);
 
     // Read the container's buckets and entries array pointers
     TargetPointer bucketsPtr = target.ReadPointer(
-        container + containerType.Layout.Fields[BucketsFieldName].Offset);
+        container + containerType.Layout.Fields["_buckets"].Offset);
     TargetPointer entriesPtr = target.ReadPointer(
-        container + containerType.Layout.Fields[EntriesFieldName].Offset);
+        container + containerType.Layout.Fields["_entries"].Offset);
 
     // Entry is a value type stored inline in the Entry[] (no object header);
     // un-shift the pre-shifted field offsets by sizeof(Object).
-    uint hashCodeOffset = entryType.Layout.Fields[HashCodeFieldName].Offset - objectSize;
-    uint nextOffset     = entryType.Layout.Fields[NextFieldName].Offset     - objectSize;
-    uint depHndOffset   = entryType.Layout.Fields[DepHndFieldName].Offset   - objectSize;
+    uint hashCodeOffset = entryType.Layout.Fields["HashCode"].Offset - objectSize;
+    uint nextOffset     = entryType.Layout.Fields["Next"].Offset     - objectSize;
+    uint depHndOffset   = entryType.Layout.Fields["depHnd"].Offset   - objectSize;
 
     // Get the runtime default hash code for the key object (returns 0 if none assigned)
     int hashCode = target.Contracts.Object.TryGetHashCode(key);

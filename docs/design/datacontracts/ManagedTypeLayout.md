@@ -28,6 +28,10 @@ the standard `Target.TypeInfo`-based field helpers such as `ReadPointerField` /
 ``` csharp
 public readonly record struct ManagedTypeInfo
 {
+    // The runtime TypeHandle for this managed type (useful for identity comparisons,
+    // e.g. comparing an object's method table against a known managed type).
+    public TypeHandle TypeHandle { get; init; }
+
     // Instance layout. Size is sizeof(Object) (the size of the object header), and each
     // Fields[name].Offset is pre-shifted by sizeof(Object) so that callers can read a field
     // from an object via `address + field.Offset`, matching the idiom used by every other
@@ -131,6 +135,7 @@ ManagedTypeInfo GetTypeInfo(string @namespace, string typeName)
 
     ManagedTypeInfo info = new ManagedTypeInfo
     {
+        TypeHandle = th,
         Layout = new Target.TypeInfo { Size = objectSize, Fields = instanceFields },
         StaticFields = staticFields,
     };
@@ -154,6 +159,10 @@ ManagedTypeInfo GetTypeInfo(string @namespace, string typeName)
 - **Static fields.** `info.StaticFields[name]` is the absolute storage-slot address
   returned by `GetFieldDescStaticAddress`. Callers still perform their own
   `ReadPointer` / `Read<T>` off that address.
+- **TypeHandle.** `info.TypeHandle` is the runtime `TypeHandle` for the resolved
+  type. Useful for identity comparisons — e.g. comparing an object's method table
+  (`Object.GetMethodTableAddress(obj)`) against `info.TypeHandle.Address` without
+  going back through `IRuntimeTypeSystem.GetTypeByNameAndModule`.
 - **Value types.** The pre-shift convention is targeted at reference types read off
   object addresses. For value-type fields laid out inline (e.g. elements of a
   `T[]` where `T` is a struct), callers must un-shift by `sizeof(Object)` to obtain
@@ -162,7 +171,3 @@ ManagedTypeInfo GetTypeInfo(string @namespace, string typeName)
   consumer needs to read managed types from a non-system assembly, this contract may
   be extended with a `GetTypeInfoInModule(ModuleHandle, …)` overload without
   affecting the current API.
-- **Future implementations.** A NativeAOT implementation
-  (`ManagedTypeLayout_naot1`) can service the same inputs from ILC-emitted
-  sub-descriptors without any consumer change.
-

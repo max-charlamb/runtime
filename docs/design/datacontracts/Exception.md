@@ -31,11 +31,18 @@ Contracts used:
 | --- |
 | `ManagedTypeLayout` |
 
+## Managed Types
+
+Field offsets for the managed type below are resolved via the
+[`ManagedTypeLayout`](ManagedTypeLayout.md) contract.
+
+| Type (namespace, name) | Fields used |
+| --- | --- |
+| (`System`, `Exception`) | `_message`, `_innerException`, `_stackTrace`, `_watsonBuckets`, `_stackTraceString`, `_remoteStackTraceString`, `_HResult`, `_xcode` |
+
 The fields of the managed `System.Exception` type are read from metadata via the
 [`ManagedTypeLayout`](ManagedTypeLayout.md) contract rather than from native data
-descriptors. The `_message`, `_innerException`, `_stackTrace`, `_watsonBuckets`,
-`_stackTraceString`, `_remoteStackTraceString`, `_HResult`, and `_xcode` field
-offsets are resolved by name.
+descriptors.
 
 ``` csharp
 TargetPointer GetNestedExceptionInfo(TargetPointer exceptionInfoAddr, out TargetPointer nextNestedExceptionInfo, out TargetPointer thrownObjectHandle)
