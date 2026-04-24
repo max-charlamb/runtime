@@ -5,11 +5,6 @@ namespace Microsoft.Diagnostics.DataContractReader.Contracts;
 
 internal struct ConditionalWeakTable_1 : IConditionalWeakTable
 {
-    private const string CWTNamespace = "System.Runtime.CompilerServices";
-    private const string CWTTypeName = "ConditionalWeakTable`2";
-    private const string ContainerTypeName = "ConditionalWeakTable`2+Container";
-    private const string EntryTypeName = "ConditionalWeakTable`2+Entry";
-
     private readonly Target _target;
 
     internal ConditionalWeakTable_1(Target target)
@@ -20,16 +15,9 @@ internal struct ConditionalWeakTable_1 : IConditionalWeakTable
     bool IConditionalWeakTable.TryGetValue(TargetPointer conditionalWeakTable, TargetPointer key, out TargetPointer value)
     {
         value = TargetPointer.Null;
-        IManagedTypeLayout ml = _target.Contracts.ManagedTypeLayout;
 
-        // Read _container field from the ConditionalWeakTable object
-        ManagedTypeInfo cwtType = ml.GetTypeInfo(CWTNamespace, CWTTypeName);
-        TargetPointer container = _target.ReadPointerField(conditionalWeakTable, cwtType, "_container");
-
-        // Read _buckets and _entries fields from the Container object
-        ManagedTypeInfo containerType = ml.GetTypeInfo(CWTNamespace, ContainerTypeName);
-        TargetPointer bucketsPtr = _target.ReadPointerField(container, containerType, "_buckets");
-        TargetPointer entriesPtr = _target.ReadPointerField(container, containerType, "_entries");
+        Data.ConditionalWeakTable cwt = _target.ProcessedData.GetOrAdd<Data.ConditionalWeakTable>(conditionalWeakTable);
+        Data.ConditionalWeakTableContainer container = _target.ProcessedData.GetOrAdd<Data.ConditionalWeakTableContainer>(cwt.Container);
 
         int hashCode = _target.Contracts.Object.TryGetHashCode(key);
         if (hashCode == 0)
@@ -37,28 +25,18 @@ internal struct ConditionalWeakTable_1 : IConditionalWeakTable
 
         hashCode &= int.MaxValue;
 
-        // Read the buckets array
-        Data.Array bucketsArray = _target.ProcessedData.GetOrAdd<Data.Array>(bucketsPtr);
+        Data.Array bucketsArray = _target.ProcessedData.GetOrAdd<Data.Array>(container.Buckets);
         uint bucketCount = bucketsArray.NumComponents;
 
         int bucket = hashCode & (int)(bucketCount - 1);
         int entriesIndex = _target.Read<int>(bucketsArray.DataPointer + (ulong)(bucket * sizeof(int)));
 
-        // Resolve Entry field layout via ManagedTypeLayout
-        ManagedTypeInfo entryType = ml.GetTypeInfo(CWTNamespace, EntryTypeName);
-
-        // Entry instance-field offsets from ManagedTypeInfo are object-start-relative (pre-shifted
-        // by sizeof(Object)). Entries live inline in the array's element storage, which does not
-        // include the object header — subtract Object.Size to obtain element-relative offsets.
-        uint objectSize = _target.GetTypeInfo(DataType.Object).Size!.Value;
-        int hashCodeElementOffset = entryType.Layout.Fields["HashCode"].Offset - (int)objectSize;
-        int nextElementOffset = entryType.Layout.Fields["Next"].Offset - (int)objectSize;
-        int depHndElementOffset = entryType.Layout.Fields["depHnd"].Offset - (int)objectSize;
+        Data.ConditionalWeakTableEntry entry = new Data.ConditionalWeakTableEntry(_target);
 
         // Get entry size from the entries array's component size
-        Data.Array entriesArray = _target.ProcessedData.GetOrAdd<Data.Array>(entriesPtr);
+        Data.Array entriesArray = _target.ProcessedData.GetOrAdd<Data.Array>(container.Entries);
         IRuntimeTypeSystem rts = _target.Contracts.RuntimeTypeSystem;
-        TargetPointer entriesMT = _target.Contracts.Object.GetMethodTableAddress(entriesPtr);
+        TargetPointer entriesMT = _target.Contracts.Object.GetMethodTableAddress(container.Entries);
         TypeHandle entriesTypeHandle = rts.GetTypeHandle(entriesMT);
         uint entrySize = rts.GetComponentSize(entriesTypeHandle);
 
@@ -66,10 +44,10 @@ internal struct ConditionalWeakTable_1 : IConditionalWeakTable
         {
             TargetPointer entryAddress = entriesArray.DataPointer + (ulong)((uint)entriesIndex * entrySize);
 
-            int entryHashCode = _target.Read<int>(entryAddress + (ulong)hashCodeElementOffset);
+            int entryHashCode = _target.Read<int>(entryAddress + (ulong)entry.HashCodeOffset);
             if (entryHashCode == hashCode)
             {
-                TargetPointer depHnd = _target.ReadPointer(entryAddress + (ulong)depHndElementOffset);
+                TargetPointer depHnd = _target.ReadPointer(entryAddress + (ulong)entry.DepHndOffset);
                 Data.ObjectHandle handle = _target.ProcessedData.GetOrAdd<Data.ObjectHandle>(depHnd);
                 if (handle.Object == key)
                 {
@@ -80,7 +58,7 @@ internal struct ConditionalWeakTable_1 : IConditionalWeakTable
                 }
             }
 
-            entriesIndex = _target.Read<int>(entryAddress + (ulong)nextElementOffset);
+            entriesIndex = _target.Read<int>(entryAddress + (ulong)entry.NextOffset);
         }
 
         return false;

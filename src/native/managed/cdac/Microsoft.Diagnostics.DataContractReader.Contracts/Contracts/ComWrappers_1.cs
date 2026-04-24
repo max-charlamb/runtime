@@ -12,14 +12,6 @@ internal struct ComWrappers_1 : IComWrappers
 {
     private const string NativeObjectWrapperNamespace = "System.Runtime.InteropServices";
     private const string NativeObjectWrapperName = "ComWrappers+NativeObjectWrapper";
-    private const string ComWrappersNamespace = "System.Runtime.InteropServices";
-    private const string ComWrappersName = "ComWrappers";
-    private const string NativeObjectWrapperCWTFieldName = "s_nativeObjectWrapperTable";
-    private const string AllManagedObjectWrapperTableFieldName = "s_allManagedObjectWrapperTable";
-    private const string ListNamespace = "System.Collections.Generic";
-    private const string ListName = "List`1";
-    private const string ListItemsFieldName = "_items";
-    private const string ListSizeFieldName = "_size";
     private static readonly Guid IID_IUnknown = new Guid("00000000-0000-0000-C000-000000000046");
     private const int CallerDefinedIUnknown = 1;
     private readonly Target _target;
@@ -119,26 +111,22 @@ internal struct ComWrappers_1 : IComWrappers
     public List<TargetPointer> GetMOWs(TargetPointer obj, out bool hasMOWTable)
     {
         hasMOWTable = false;
-        IManagedTypeLayout ml = _target.Contracts.ManagedTypeLayout;
-        ManagedTypeInfo cwType = ml.GetTypeInfo(ComWrappersNamespace, ComWrappersName);
-        TargetPointer mowTableAddr = _target.ReadPointer(cwType.StaticFields[AllManagedObjectWrapperTableFieldName]);
+        Data.ComWrappers comWrappers = new Data.ComWrappers(_target);
 
         List<TargetPointer> mows = new List<TargetPointer>();
 
-        if (mowTableAddr == TargetPointer.Null)
+        if (comWrappers.AllManagedObjectWrapperTable == TargetPointer.Null)
             return mows;
         IConditionalWeakTable cwt = _target.Contracts.ConditionalWeakTable;
-        if (cwt.TryGetValue(mowTableAddr, obj, out TargetPointer mowListObj))
+        if (cwt.TryGetValue(comWrappers.AllManagedObjectWrapperTable, obj, out TargetPointer mowListObj))
         {
             hasMOWTable = true;
-            ManagedTypeInfo listType = ml.GetTypeInfo(ListNamespace, ListName);
-            TargetPointer listItemsPtr = _target.ReadPointerField(mowListObj, listType, ListItemsFieldName);
-            int size = _target.ReadField<int>(mowListObj, listType, ListSizeFieldName);
+            Data.ListObject list = _target.ProcessedData.GetOrAdd<Data.ListObject>(mowListObj);
 
-            if (size > 0 && listItemsPtr != TargetPointer.Null)
+            if (list.Size > 0 && list.Items != TargetPointer.Null)
             {
-                Data.Array listItemsArray = _target.ProcessedData.GetOrAdd<Data.Array>(listItemsPtr);
-                for (int i = 0; i < size; i++)
+                Data.Array listItemsArray = _target.ProcessedData.GetOrAdd<Data.Array>(list.Items);
+                for (int i = 0; i < list.Size; i++)
                 {
                     TargetPointer mow = _target.ReadPointer(listItemsArray.DataPointer + (ulong)(i * _target.PointerSize));
                     Data.ManagedObjectWrapperHolderObject mowHolderObject = _target.ProcessedData.GetOrAdd<Data.ManagedObjectWrapperHolderObject>(mow);
@@ -166,13 +154,11 @@ internal struct ComWrappers_1 : IComWrappers
 
     public TargetPointer GetComWrappersRCWForObject(TargetPointer obj)
     {
-        IManagedTypeLayout ml = _target.Contracts.ManagedTypeLayout;
-        ManagedTypeInfo cwType = ml.GetTypeInfo(ComWrappersNamespace, ComWrappersName);
-        TargetPointer nativeObjectWrapperCWTAddr = _target.ReadPointer(cwType.StaticFields[NativeObjectWrapperCWTFieldName]);
-        if (nativeObjectWrapperCWTAddr == TargetPointer.Null)
+        Data.ComWrappers comWrappers = new Data.ComWrappers(_target);
+        if (comWrappers.NativeObjectWrapperTable == TargetPointer.Null)
             return TargetPointer.Null;
         IConditionalWeakTable cwt = _target.Contracts.ConditionalWeakTable;
-        _ = cwt.TryGetValue(nativeObjectWrapperCWTAddr, obj, out TargetPointer rcw);
+        _ = cwt.TryGetValue(comWrappers.NativeObjectWrapperTable, obj, out TargetPointer rcw);
         return rcw;
     }
 }
