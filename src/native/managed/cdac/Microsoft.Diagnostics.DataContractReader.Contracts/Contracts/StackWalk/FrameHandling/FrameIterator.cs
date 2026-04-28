@@ -580,9 +580,10 @@ internal sealed class FrameIterator
             return;
 
         ReadOnlySpan<byte> signature;
+        MetadataReader? metadataReader;
         try
         {
-            signature = GetMethodSignatureBytes(methodDescPtr);
+            signature = GetMethodSignatureBytes(methodDescPtr, out metadataReader);
         }
         catch (System.Exception)
         {
@@ -595,20 +596,14 @@ internal sealed class FrameIterator
         MethodSignature<GcTypeKind> methodSig;
         try
         {
-            unsafe
-            {
-                fixed (byte* pSig = signature)
-                {
-                    BlobReader blobReader = new(pSig, signature.Length);
-                    SignatureDecoder<GcTypeKind, object?> decoder = new(
-                        GcSignatureTypeProvider.Instance, metadataReader: null!, genericContext: null);
-                    methodSig = decoder.DecodeMethodSignature(ref blobReader);
-                }
-            }
+            RuntimeSignatureDecoder<GcTypeKind, object?, SpanSignatureReader> decoder = new(
+                GcSignatureTypeProvider.Instance, target, genericContext: null,
+                new SpanSignatureReader(signature, target.IsLittleEndian), metadataReader);
+            methodSig = decoder.DecodeMethodSignature();
         }
         catch (System.Exception)
         {
-            // If signature decoding fails (e.g., ELEMENT_TYPE_INTERNAL), skip this frame.
+            // If signature decoding fails for any reason, skip this frame.
             // The GCRefMap path handles these cases when available.
             return;
         }
@@ -707,8 +702,9 @@ internal sealed class FrameIterator
         }
     }
 
-    private ReadOnlySpan<byte> GetMethodSignatureBytes(TargetPointer methodDescPtr)
+    private ReadOnlySpan<byte> GetMethodSignatureBytes(TargetPointer methodDescPtr, out MetadataReader? metadataReader)
     {
+        metadataReader = null;
         IRuntimeTypeSystem rts = target.Contracts.RuntimeTypeSystem;
         MethodDescHandle mdh = rts.GetMethodDescHandle(methodDescPtr);
 
@@ -727,13 +723,13 @@ internal sealed class FrameIterator
         ModuleHandle moduleHandle = loader.GetModuleHandleFromModulePtr(modulePtr);
 
         IEcmaMetadata ecmaMetadata = target.Contracts.EcmaMetadata;
-        MetadataReader? mdReader = ecmaMetadata.GetMetadata(moduleHandle);
-        if (mdReader is null)
+        metadataReader = ecmaMetadata.GetMetadata(moduleHandle);
+        if (metadataReader is null)
             return default;
 
         MethodDefinitionHandle methodDefHandle = MetadataTokens.MethodDefinitionHandle((int)(methodToken & 0x00FFFFFF));
-        MethodDefinition methodDef = mdReader.GetMethodDefinition(methodDefHandle);
-        BlobReader blobReader = mdReader.GetBlobReader(methodDef.Signature);
+        MethodDefinition methodDef = metadataReader.GetMethodDefinition(methodDefHandle);
+        BlobReader blobReader = metadataReader.GetBlobReader(methodDef.Signature);
         return blobReader.ReadBytes(blobReader.Length);
     }
 
