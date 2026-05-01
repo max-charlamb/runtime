@@ -20,7 +20,7 @@ namespace System.Formats.Asn1
         private byte[] _buffer = null!;
         private int _offset;
         private Stack<StackFrame>? _nestingStack;
-#if NET9_0_OR_GREATER
+#if NET
         private int _encodeDepth;
 #endif
 
@@ -81,7 +81,7 @@ namespace System.Formats.Asn1
         /// </summary>
         public void Reset()
         {
-#if NET9_0_OR_GREATER
+#if NET
             if (_encodeDepth != 0)
             {
                 throw new InvalidOperationException(SR.AsnWriter_ModifyingWhileEncoding);
@@ -209,7 +209,7 @@ namespace System.Formats.Asn1
             return _buffer.AsSpan(0, _offset).ToArray();
         }
 
-#if NET9_0_OR_GREATER
+#if NET
         /// <summary>
         ///   Provides the encoded representation of the data to the specified callback.
         /// </summary>
@@ -231,8 +231,7 @@ namespace System.Formats.Asn1
         /// </exception>
         public TReturn Encode<TReturn>(Func<ReadOnlySpan<byte>, TReturn> encodeCallback)
         {
-            if (encodeCallback is null)
-                throw new ArgumentNullException(nameof(encodeCallback));
+            ArgumentNullException.ThrowIfNull(encodeCallback);
 
             _encodeDepth = checked(_encodeDepth + 1);
 
@@ -275,8 +274,7 @@ namespace System.Formats.Asn1
         public TReturn Encode<TState, TReturn>(TState state, Func<TState, ReadOnlySpan<byte>, TReturn> encodeCallback)
             where TState : allows ref struct
         {
-            if (encodeCallback is null)
-                throw new ArgumentNullException(nameof(encodeCallback));
+            ArgumentNullException.ThrowIfNull(encodeCallback);
 
             _encodeDepth = checked(_encodeDepth + 1);
 
@@ -313,8 +311,7 @@ namespace System.Formats.Asn1
         public void Encode<TState>(TState state, Action<TState, ReadOnlySpan<byte>> encodeCallback)
             where TState : allows ref struct
         {
-            if (encodeCallback is null)
-                throw new ArgumentNullException(nameof(encodeCallback));
+            ArgumentNullException.ThrowIfNull(encodeCallback);
 
             _encodeDepth = checked(_encodeDepth + 1);
 
@@ -381,10 +378,7 @@ namespace System.Formats.Asn1
         /// </exception>
         public bool EncodedValueEquals(AsnWriter other)
         {
-            if (other is null)
-            {
-                throw new ArgumentNullException(nameof(other));
-            }
+            ArgumentNullException.ThrowIfNull(other);
 
             return EncodeAsSpan().SequenceEqual(other.EncodeAsSpan());
         }
@@ -396,7 +390,7 @@ namespace System.Formats.Asn1
                 throw new OverflowException();
             }
 
-#if NET9_0_OR_GREATER
+#if NET
             if (_encodeDepth != 0)
             {
                 throw new InvalidOperationException(SR.AsnWriter_ModifyingWhileEncoding);
@@ -545,10 +539,7 @@ namespace System.Formats.Asn1
         /// </exception>
         public void CopyTo(AsnWriter destination)
         {
-            if (destination is null)
-            {
-                throw new ArgumentNullException(nameof(destination));
-            }
+            ArgumentNullException.ThrowIfNull(destination);
 
             try
             {

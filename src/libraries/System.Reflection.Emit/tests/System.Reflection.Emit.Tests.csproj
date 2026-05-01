@@ -4,6 +4,10 @@
     <TargetFramework>$(NetCoreAppCurrent)</TargetFramework>
     <TestRuntime>true</TestRuntime>
     <IncludeRemoteExecutor>true</IncludeRemoteExecutor>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- https://github.com/dotnet/runtime/issues/126862 -->
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
   </PropertyGroup>
 
   <ItemGroup>
@@ -113,6 +117,7 @@
     <Compile Include="TypeBuilder\TypeBuilderGetField.cs" />
     <Compile Include="TypeBuilder\TypeBuilderGetGenericTypeDefinition.cs" />
     <Compile Include="TypeBuilder\TypeBuilderGetMethod.cs" />
+    <Compile Include="TypeBuilder\TypeBuilderGetNullableUnderlyingType.cs" />
     <Compile Include="TypeBuilder\TypeBuilderGUID.cs" />
     <Compile Include="TypeBuilder\TypeBuilderIsByRefLike.cs" />
     <Compile Include="TypeBuilder\TypeBuilderIsGenericParameter.cs" />
@@ -121,6 +126,7 @@
     <Compile Include="TypeBuilder\TypeBuilderMakeArrayType.cs" />
     <Compile Include="TypeBuilder\TypeBuilderMakeByRefType.cs" />
     <Compile Include="TypeBuilder\TypeBuilderMakeGenericType.cs" />
+    <Compile Include="TypeBuilder\TypeBuilderMakeFunctionPointerType.cs" />
     <Compile Include="TypeBuilder\TypeBuilderMakePointerType.cs" />
     <Compile Include="TypeBuilder\TypeBuilderName.cs" />
     <Compile Include="TypeBuilder\TypeBuilderNamespace.cs" />
@@ -134,6 +140,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="$(LibrariesProjectRoot)System.Reflection.Emit\src\System.Reflection.Emit.csproj" />
     <ProjectReference Include="$(LibrariesProjectRoot)System.Reflection.MetadataLoadContext\src\System.Reflection.MetadataLoadContext.csproj" />
   </ItemGroup>
 

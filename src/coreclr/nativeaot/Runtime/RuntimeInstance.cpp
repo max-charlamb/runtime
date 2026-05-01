@@ -1,11 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
+
 #include "common.h"
 #include "CommonTypes.h"
 #include "CommonMacros.h"
 #include "daccess.h"
-#include "PalRedhawkCommon.h"
-#include "PalRedhawk.h"
+#include "PalLimitedContext.h"
+#include "Pal.h"
 #include "rhassert.h"
 #include "slist.h"
 #include "holder.h"
@@ -23,7 +24,6 @@
 #include "MethodTable.h"
 
 #include "CommonMacros.inl"
-#include "slist.inl"
 #include "MethodTable.inl"
 #include "../../inc/clrversion.h"
 
@@ -215,7 +215,7 @@ void RuntimeInstance::RegisterCodeManager(ICodeManager * pCodeManager, PTR_VOID 
     m_cbManagedCodeRange = cbRange;
 }
 
-extern "C" void __stdcall RegisterCodeManager(ICodeManager * pCodeManager, PTR_VOID pvStartRange, uint32_t cbRange)
+extern "C" void RegisterCodeManager(ICodeManager * pCodeManager, PTR_VOID pvStartRange, uint32_t cbRange)
 {
     GetRuntimeInstance()->RegisterCodeManager(pCodeManager, pvStartRange, cbRange);
 }
@@ -255,7 +255,7 @@ bool RuntimeInstance::IsUnboxingStub(uint8_t* pCode)
     return false;
 }
 
-extern "C" bool __stdcall RegisterUnboxingStubs(PTR_VOID pvStartRange, uint32_t cbRange)
+extern "C" bool RegisterUnboxingStubs(PTR_VOID pvStartRange, uint32_t cbRange)
 {
     return GetRuntimeInstance()->RegisterUnboxingStubs(pvStartRange, cbRange);
 }
@@ -267,7 +267,7 @@ bool RuntimeInstance::RegisterTypeManager(TypeManager * pTypeManager)
         return false;
 
     pEntry->m_pTypeManager = pTypeManager;
-    m_TypeManagerList.PushHeadInterlocked(pEntry);
+    m_TypeManagerList.InsertHead(pEntry);
 
     return true;
 }
@@ -289,7 +289,7 @@ FCIMPL1(void*, RhpRegisterOsModule, HANDLE hOsModule)
 
     pEntry->m_osModule = hOsModule;
     RuntimeInstance *pRuntimeInstance = GetRuntimeInstance();
-    pRuntimeInstance->GetOsModuleList()->PushHeadInterlocked(pEntry);
+    pRuntimeInstance->GetOsModuleList()->InsertHead(pEntry);
 
     return hOsModule; // Return non-null on success
 }

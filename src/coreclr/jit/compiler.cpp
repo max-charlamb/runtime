@@ -21,7 +21,10 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #include "lower.h"
 #include "stacklevelsetter.h"
 #include "patchpointinfo.h"
+#include "fgprofilesynthesis.h"
 #include "jitstd/algorithm.h"
+#include "minipal/time.h"
+#include "minipal/utf8.h"
 
 extern ICorJitHost* g_jitHost;
 
@@ -129,15 +132,6 @@ const BYTE genActualTypes[] = {
 };
 
 #endif // FEATURE_JIT_METHOD_PERF
-/*****************************************************************************/
-inline unsigned getCurTime()
-{
-    SYSTEMTIME tim;
-
-    GetSystemTime(&tim);
-
-    return (((tim.wHour * 60) + tim.wMinute) * 60 + tim.wSecond) * 1000 + tim.wMilliseconds;
-}
 
 /*****************************************************************************/
 #ifdef DEBUG
@@ -292,40 +286,6 @@ Histogram computeReachabilitySetsIterationTable(computeReachabilitySetsIteration
 
 #endif // COUNT_BASIC_BLOCKS
 
-/*****************************************************************************
- *
- *  Used by optFindNaturalLoops to gather statistical information such as
- *   - total number of natural loops
- *   - number of loops with 1, 2, ... exit conditions
- *   - number of loops that have an iterator (for like)
- *   - number of loops that have a constant iterator
- */
-
-#if COUNT_LOOPS
-
-unsigned totalLoopMethods;        // counts the total number of methods that have natural loops
-unsigned maxLoopsPerMethod;       // counts the maximum number of loops a method has
-unsigned totalLoopCount;          // counts the total number of natural loops
-unsigned totalUnnatLoopCount;     // counts the total number of (not-necessarily natural) loops
-unsigned totalUnnatLoopOverflows; // # of methods that identified more unnatural loops than we can represent
-unsigned iterLoopCount;           // counts the # of loops with an iterator (for like)
-unsigned constIterLoopCount;      // counts the # of loops with a constant iterator (for like)
-bool     hasMethodLoops;          // flag to keep track if we already counted a method as having loops
-unsigned loopsThisMethod;         // counts the number of loops in the current method
-bool     loopOverflowThisMethod;  // True if we exceeded the max # of loops in the method.
-
-/* Histogram for number of loops in a method */
-
-unsigned  loopCountBuckets[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0};
-Histogram loopCountTable(loopCountBuckets);
-
-/* Histogram for number of loop exits */
-
-unsigned  loopExitCountBuckets[] = {0, 1, 2, 3, 4, 5, 6, 0};
-Histogram loopExitCountTable(loopExitCountBuckets);
-
-#endif // COUNT_LOOPS
-
 Compiler::Compiler(ArenaAllocator*       arena,
                    CORINFO_METHOD_HANDLE methodHnd,
                    COMP_HANDLE           compHnd,
@@ -375,10 +335,6 @@ Compiler::Compiler(ArenaAllocator*       arena,
          JitConfig.JitStressOnly().contains(info.compMethodHnd, info.compClassHnd, &info.compMethodInfo->args));
 
 #endif // DEBUG
-
-#if defined(FEATURE_EH_WINDOWS_X86)
-    eeIsNativeAotAbi = IsTargetAbi(CORINFO_NATIVEAOT_ABI);
-#endif
 
     if (compIsForInlining())
     {
@@ -449,7 +405,7 @@ Compiler::Compiler(ArenaAllocator*       arena,
     // Do we have a matched VM? Or are we "abusing" the VM to help us do JIT work (such as using an x86 native VM
     // with an ARM-targeting "altjit").
     // Match CPU/ABI for compMatchedVM
-    info.compMatchedVM = IMAGE_FILE_MACHINE_TARGET == info.compCompHnd->getExpectedTargetArchitecture();
+    info.compMatchedVM = info.compCompHnd->getExpectedTargetArchitecture() == CORINFO_ARCH_TARGET;
 
     // Match OS for compMatchedVM
     CORINFO_EE_INFO* eeInfo = eeGetEEInfo();
@@ -482,14 +438,24 @@ Compiler::Compiler(ArenaAllocator*       arena,
 
     compMaxUncheckedOffsetForNullObject = eeInfo->maxUncheckedOffsetForNullObject;
 
+#if defined(DEBUG) && defined(TARGET_WASM)
+    // TODO-WASM: remove once we no longer need to use x86/arm collections for wasm replay
+    // if we are cross-replaying wasm, override compMaxUncheckedOffsetForNullObject
+    if (!info.compMatchedVM)
+    {
+        compMaxUncheckedOffsetForNullObject = 1024 - 1;
+    }
+#endif
+
     info.compProfilerCallback = false; // Assume false until we are told to hook this method.
 
     info.compCode         = methodInfo->ILCode;
     info.compILCodeSize   = methodInfo->ILCodeSize;
     info.compILImportSize = 0;
 
-    info.compHasNextCallRetAddr = false;
-    info.compIsVarArgs          = false;
+    info.compHasNextCallRetAddr    = false;
+    info.compIsVarArgs             = false;
+    info.compUsesAsyncContinuation = false;
 }
 
 //------------------------------------------------------------------------
@@ -789,6 +755,38 @@ var_types Compiler::getReturnTypeForStruct(CORINFO_CLASS_HANDLE     clsHnd,
         structSize = info.compCompHnd->getClassSize(clsHnd);
     }
     assert(structSize > 0);
+
+#if defined(TARGET_WASM)
+    CorInfoWasmType abiType = info.compCompHnd->getWasmLowering(clsHnd);
+
+    if (abiType == CORINFO_WASM_TYPE_VOID)
+    {
+        howToReturnStruct = SPK_ByReference;
+        useType           = TYP_UNKNOWN;
+    }
+    else
+    {
+        howToReturnStruct = SPK_PrimitiveType;
+        useType           = WasmClassifier::ToJitType(abiType);
+    }
+
+    if (wbReturnStruct != nullptr)
+    {
+        *wbReturnStruct = howToReturnStruct;
+    }
+
+    return useType;
+#else
+#ifdef DEBUG
+    // Extra query to facilitate wasm replay of native collections.
+    // TODO-WASM: delete once we can get a wasm collection.
+    //
+    if (JitConfig.EnableExtraSuperPmiQueries() && IsReadyToRun())
+    {
+        info.compCompHnd->getWasmLowering(clsHnd);
+    }
+#endif // DEBUG
+#endif // defined(TARGET_WASM)
 
 #ifdef SWIFT_SUPPORT
     if (callConv == CorInfoCallConvExtension::Swift)
@@ -1529,32 +1527,6 @@ void Compiler::compShutdown()
 
 #endif // COUNT_BASIC_BLOCKS
 
-#if COUNT_LOOPS
-
-    jitprintf("\n");
-    jitprintf("---------------------------------------------------\n");
-    jitprintf("Loop stats\n");
-    jitprintf("---------------------------------------------------\n");
-    jitprintf("Total number of methods with loops is %5u\n", totalLoopMethods);
-    jitprintf("Total number of              loops is %5u\n", totalLoopCount);
-    jitprintf("Maximum number of loops per method is %5u\n", maxLoopsPerMethod);
-    jitprintf("Total number of 'unnatural' loops is %5u\n", totalUnnatLoopCount);
-    jitprintf("# of methods overflowing unnat loop limit is %5u\n", totalUnnatLoopOverflows);
-    jitprintf("Total number of loops with an         iterator is %5u\n", iterLoopCount);
-    jitprintf("Total number of loops with a constant iterator is %5u\n", constIterLoopCount);
-
-    jitprintf("--------------------------------------------------\n");
-    jitprintf("Loop count frequency table:\n");
-    jitprintf("--------------------------------------------------\n");
-    loopCountTable.dump(jitstdout());
-    jitprintf("--------------------------------------------------\n");
-    jitprintf("Loop exit count frequency table:\n");
-    jitprintf("--------------------------------------------------\n");
-    loopExitCountTable.dump(jitstdout());
-    jitprintf("--------------------------------------------------\n");
-
-#endif // COUNT_LOOPS
-
 #if MEASURE_NODE_SIZE
 
     jitprintf("\n");
@@ -1602,10 +1574,10 @@ void Compiler::compShutdown()
     if (s_dspMemStats)
     {
         jitprintf("\nAll allocations:\n");
-        ArenaAllocator::dumpAggregateMemStats(jitstdout());
+        JitMemStatsInfo::dumpAggregateMemStats(jitstdout());
 
         jitprintf("\nLargest method:\n");
-        ArenaAllocator::dumpMaxMemStats(jitstdout());
+        JitMemStatsInfo::dumpMaxMemStats(jitstdout());
 
         jitprintf("\n");
         jitprintf("---------------------------------------------------\n");
@@ -1688,7 +1660,7 @@ void Compiler::compShutdown()
     jitprintf("   NYI:                 %u\n", fatal_NYI);
 #endif // MEASURE_FATAL
 
-#if CALL_ARG_STATS || COUNT_BASIC_BLOCKS || COUNT_LOOPS || EMITTER_STATS || MEASURE_NODE_SIZE || MEASURE_MEM_ALLOC
+#if CALL_ARG_STATS || COUNT_BASIC_BLOCKS || EMITTER_STATS || MEASURE_NODE_SIZE || MEASURE_MEM_ALLOC
     DumpOnShutdown::DumpAll();
 #endif
 }
@@ -1724,22 +1696,24 @@ void Compiler::compDone()
 #endif // LATE_DISASM
 }
 
-void* Compiler::compGetHelperFtn(CorInfoHelpFunc ftnNum, /* IN  */
-                                 void**          ppIndirection)   /* OUT */
+CORINFO_CONST_LOOKUP Compiler::compGetHelperFtn(CorInfoHelpFunc ftnNum)
 {
-    void* addr;
+    CORINFO_CONST_LOOKUP lookup;
 
     if (info.compMatchedVM)
     {
-        addr = info.compCompHnd->getHelperFtn(ftnNum, ppIndirection);
+        info.compCompHnd->getHelperFtn(ftnNum, &lookup);
+        // The JIT only expects these two possible access types
+        assert(lookup.accessType == IAT_VALUE || lookup.accessType == IAT_PVALUE);
     }
     else
     {
         // If we don't have a matched VM, we won't get valid results when asking for a helper function.
-        addr = (void*)(uintptr_t)(0xCA11CA11); // "callcall"
+        lookup.addr       = (void*)(uintptr_t)(0xCA11CA11); // "callcall"
+        lookup.accessType = IAT_VALUE;
     }
 
-    return addr;
+    return lookup;
 }
 
 unsigned Compiler::compGetTypeSize(CorInfoType cit, CORINFO_CLASS_HANDLE clsHnd)
@@ -1899,41 +1873,42 @@ const char* Compiler::compRegVarName(regNumber reg, bool displayVar, bool isFloa
 
 const char* Compiler::compRegNameForSize(regNumber reg, size_t size)
 {
-    if (size == 0 || size >= 4)
+#if CPU_HAS_BYTE_REGS
+    if (size == 1 || size == 2)
     {
-        return compRegVarName(reg, true);
+        // clang-format off
+        static const char* sizeNames[][2] =
+        {
+            { "al", "ax" },
+            { "cl", "cx" },
+            { "dl", "dx" },
+            { "bl", "bx" },
+    #ifdef TARGET_AMD64
+            {  "spl",   "sp" }, // ESP
+            {  "bpl",   "bp" }, // EBP
+            {  "sil",   "si" }, // ESI
+            {  "dil",   "di" }, // EDI
+            {  "r8b",  "r8w" },
+            {  "r9b",  "r9w" },
+            { "r10b", "r10w" },
+            { "r11b", "r11w" },
+            { "r12b", "r12w" },
+            { "r13b", "r13w" },
+            { "r14b", "r14w" },
+            { "r15b", "r15w" },
+    #endif // TARGET_AMD64
+        };
+        // clang-format on
+
+        assert(isByteReg(reg));
+        assert(genRegMask(reg) & RBM_BYTE_REGS);
+        assert(size == 1 || size == 2);
+
+        return sizeNames[reg][size - 1];
     }
+#endif // CPU_HAS_BYTE_REGS
 
-    // clang-format off
-    static
-    const char  *   sizeNames[][2] =
-    {
-        { "al", "ax" },
-        { "cl", "cx" },
-        { "dl", "dx" },
-        { "bl", "bx" },
-#ifdef TARGET_AMD64
-        {  "spl",   "sp" }, // ESP
-        {  "bpl",   "bp" }, // EBP
-        {  "sil",   "si" }, // ESI
-        {  "dil",   "di" }, // EDI
-        {  "r8b",  "r8w" },
-        {  "r9b",  "r9w" },
-        { "r10b", "r10w" },
-        { "r11b", "r11w" },
-        { "r12b", "r12w" },
-        { "r13b", "r13w" },
-        { "r14b", "r14w" },
-        { "r15b", "r15w" },
-#endif // TARGET_AMD64
-    };
-    // clang-format on
-
-    assert(isByteReg(reg));
-    assert(genRegMask(reg) & RBM_BYTE_REGS);
-    assert(size == 1 || size == 2);
-
-    return sizeNames[reg][size - 1];
+    return compRegVarName(reg, true);
 }
 
 #ifdef DEBUG
@@ -1978,11 +1953,15 @@ void Compiler::compSetProcessor()
     opts.compSupportsISAReported.Reset();
     opts.compSupportsISAExactly.Reset();
 
-// The VM will set the ISA flags depending on actual hardware support
-// and any specified config switches specified by the user. The exception
-// here is for certain "artificial ISAs" such as Vector64/128/256 where they
-// don't actually exist. The JIT is in charge of adding those and ensuring
-// the total sum of flags is still valid.
+    // The VM will set the ISA flags depending on actual hardware support and any
+    // config values specified by the user. Config may cause the VM to omit baseline
+    // ISAs from the supported set. We force their inclusion here so that JIT code
+    // can use them unconditionally, but we will honor the config when resolving
+    // managed HWIntrinsic methods.
+    //
+    // We also take care of adding the virtual vector ISAs (i.e. Vector64/128/256/512)
+    // here, based on the combination of hardware ISA support and config values.
+
 #if defined(TARGET_XARCH)
     // If the VM passed in a virtual vector ISA, it was done to communicate PreferredVectorBitWidth.
     // No check is done for the validity of the value, since it will be clamped to max supported by
@@ -2013,49 +1992,34 @@ void Compiler::compSetProcessor()
            !instructionSetFlags.HasInstructionSet(InstructionSet_Vector256) &&
            !instructionSetFlags.HasInstructionSet(InstructionSet_Vector512));
 
-    if (instructionSetFlags.HasInstructionSet(InstructionSet_SSE))
-    {
-        instructionSetFlags.AddInstructionSet(InstructionSet_Vector128);
-    }
+    // Ensure required baseline ISAs are supported in JIT code, even if not passed in by the VM.
+    instructionSetFlags.AddInstructionSet(InstructionSet_X86Base);
+#ifdef TARGET_AMD64
+    instructionSetFlags.AddInstructionSet(InstructionSet_X86Base_X64);
+#endif // TARGET_AMD64
+
+    // We can now add the virtual vector ISAs as appropriate. Vector128 is part of the required baseline.
+    instructionSetFlags.AddInstructionSet(InstructionSet_Vector128);
 
     if (instructionSetFlags.HasInstructionSet(InstructionSet_AVX))
     {
         instructionSetFlags.AddInstructionSet(InstructionSet_Vector256);
     }
 
-    if (instructionSetFlags.HasInstructionSet(InstructionSet_EVEX))
+    if (instructionSetFlags.HasInstructionSet(InstructionSet_AVX512))
     {
-        if (instructionSetFlags.HasInstructionSet(InstructionSet_AVX512F))
-        {
-            // x86-64-v4 feature level supports AVX512F, AVX512BW, AVX512CD, AVX512DQ, AVX512VL
-            // These have been shipped together historically and at the time of this writing
-            // there exists no hardware which doesn't support the entire feature set. To simplify
-            // the overall JIT implementation, we currently require the entire set of ISAs to be
-            // supported and disable AVX512 support otherwise.
-
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX512F));
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX512F_VL));
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX512BW));
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX512BW_VL));
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX512CD));
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX512CD_VL));
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX512DQ));
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX512DQ_VL));
-
-            instructionSetFlags.AddInstructionSet(InstructionSet_Vector512);
-        }
-        else
-        {
-            // We shouldn't have EVEX enabled if neither AVX512 nor AVX10v1 are supported
-            assert(instructionSetFlags.HasInstructionSet(InstructionSet_AVX10v1));
-        }
+        instructionSetFlags.AddInstructionSet(InstructionSet_Vector512);
     }
 #elif defined(TARGET_ARM64)
-    if (instructionSetFlags.HasInstructionSet(InstructionSet_AdvSimd))
-    {
-        instructionSetFlags.AddInstructionSet(InstructionSet_Vector64);
-        instructionSetFlags.AddInstructionSet(InstructionSet_Vector128);
-    }
+    // Ensure required baseline ISAs are supported in JIT code, even if not passed in by the VM.
+    instructionSetFlags.AddInstructionSet(InstructionSet_ArmBase);
+    instructionSetFlags.AddInstructionSet(InstructionSet_ArmBase_Arm64);
+    instructionSetFlags.AddInstructionSet(InstructionSet_AdvSimd);
+    instructionSetFlags.AddInstructionSet(InstructionSet_AdvSimd_Arm64);
+
+    // Add virtual vector ISAs. These are both supported as part of the required baseline.
+    instructionSetFlags.AddInstructionSet(InstructionSet_Vector64);
+    instructionSetFlags.AddInstructionSet(InstructionSet_Vector128);
 #endif // TARGET_ARM64
 
     assert(instructionSetFlags.Equals(EnsureInstructionSetFlagsAreValid(instructionSetFlags)));
@@ -2151,8 +2115,6 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
     {
         // The following flags are lost when inlining. (They are removed in
         // Compiler::fgInvokeInlineeCompiler().)
-        assert(!jitFlags->IsSet(JitFlags::JIT_FLAG_BBINSTR));
-        assert(!jitFlags->IsSet(JitFlags::JIT_FLAG_BBINSTR_IF_LOOPS));
         assert(!jitFlags->IsSet(JitFlags::JIT_FLAG_PROF_ENTERLEAVE));
         assert(!jitFlags->IsSet(JitFlags::JIT_FLAG_DEBUG_EnC));
         assert(!jitFlags->IsSet(JitFlags::JIT_FLAG_REVERSE_PINVOKE));
@@ -2297,7 +2259,7 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
 #ifdef DEBUG
 
     const JitConfigValues::MethodSet* pfAltJit;
-    if (jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT))
+    if (jitFlags->IsSet(JitFlags::JIT_FLAG_AOT))
     {
         pfAltJit = &JitConfig.AltJitNgen();
     }
@@ -2323,7 +2285,7 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
 #else // !DEBUG
 
     const char* altJitVal;
-    if (jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT))
+    if (jitFlags->IsSet(JitFlags::JIT_FLAG_AOT))
     {
         altJitVal = JitConfig.AltJitNgen().list();
     }
@@ -2552,6 +2514,7 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
                 fgPgoDisabled    = true;
             }
         }
+#endif // DEBUG
 
         // A successful result implies a non-NULL fgPgoSchema
         //
@@ -2571,6 +2534,11 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
                     break;
                 }
             }
+
+            // Stash pointers to PGO info on the context so
+            // we can access it contextually later.
+            //
+            compInlineContext->SetPgoInfo(PgoInfo(this));
         }
 
         // A failed result implies a NULL fgPgoSchema
@@ -2580,8 +2548,19 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
         {
             assert(fgPgoSchema == nullptr);
         }
-#endif // DEBUG
     }
+
+    bool enableInliningMethodsWithEH = JitConfig.JitInlineMethodsWithEH() > 0;
+
+#ifdef DEBUG
+    static ConfigMethodRange JitInlineMethodsWithEHRange;
+    JitInlineMethodsWithEHRange.EnsureInit(JitConfig.JitInlineMethodsWithEHRange());
+    const unsigned hash    = impInlineRoot()->info.compMethodHash();
+    const bool     inRange = JitInlineMethodsWithEHRange.Contains(hash);
+    enableInliningMethodsWithEH &= inRange;
+#endif
+
+    opts.compInlineMethodsWithEH = enableInliningMethodsWithEH;
 
     if (compIsForInlining())
     {
@@ -2599,8 +2578,9 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
     opts.genFPorder = true;
     opts.genFPopt   = true;
 
-    opts.instrCount = 0;
-    opts.lvRefCount = 0;
+    opts.instrCount     = 0;
+    opts.callInstrCount = 0;
+    opts.lvRefCount     = 0;
 
 #ifdef PROFILING_SUPPORTED
     opts.compJitELTHookEnabled = false;
@@ -2707,7 +2687,7 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
         }
 #endif // LATE_DISASM
 
-        if (JitConfig.JitDasmWithAddress() != 0)
+        if (JitConfig.JitDisasmWithAddress() != 0)
         {
             opts.disAddr = true;
         }
@@ -2915,13 +2895,13 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
     // Honour DOTNET_JitELTHookEnabled or STRESS_PROFILER_CALLBACKS stress mode
     // only if VM has not asked us to generate profiler hooks in the first place.
     // That is, override VM only if it hasn't asked for a profiler callback for this method.
-    // Don't run this stress mode when pre-JITing, as we would need to emit a relocation
+    // Don't run this stress mode under AOT, as we would need to emit a relocation
     // for the call to the fake ELT hook, which wouldn't make sense, as we can't store that
-    // in the pre-JIT image.
+    // in the AOT image.
     if (!compProfilerHookNeeded)
     {
         if ((JitConfig.JitELTHookEnabled() != 0) ||
-            (!jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT) && compStressCompile(STRESS_PROFILER_CALLBACKS, 5)))
+            (!jitFlags->IsSet(JitFlags::JIT_FLAG_AOT) && compStressCompile(STRESS_PROFILER_CALLBACKS, 5)))
         {
             opts.compJitELTHookEnabled = true;
         }
@@ -2937,10 +2917,10 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
         if (RunningSuperPmiReplay())
         {
 #ifdef HOST_64BIT
-            static_assert_no_msg(sizeof(void*) == 8);
+            static_assert(sizeof(void*) == 8);
             compProfilerMethHnd = (void*)0x0BADF00DBEADCAFE;
 #else
-            static_assert_no_msg(sizeof(void*) == 4);
+            static_assert(sizeof(void*) == 4);
             compProfilerMethHnd = (void*)0x0BADF00D;
 #endif
         }
@@ -3011,7 +2991,7 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
 #ifdef DEBUG
     enableFakeSplitting = JitConfig.JitFakeProcedureSplitting();
 
-#if defined(TARGET_XARCH)
+#if defined(TARGET_XARCH) || defined(TARGET_RISCV64)
     // Whether encoding of absolute addr as PC-rel offset is enabled
     opts.compEnablePCRelAddr = (JitConfig.EnablePCRelAddr() != 0);
 #endif
@@ -3037,7 +3017,7 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
 
     if (opts.compProcedureSplitting)
     {
-        // Note that opts.compdbgCode is true under ngen for checked assemblies!
+        // Note that opts.compDbgCode is true under AOT for checked assemblies!
         opts.compProcedureSplitting = !opts.compDbgCode || enableFakeSplitting;
 
 #ifdef DEBUG
@@ -3143,9 +3123,14 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
             printf("OPTIONS: optimizer should use profile data\n");
         }
 
-        if (jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT))
+        if (jitFlags->IsSet(JitFlags::JIT_FLAG_AOT))
         {
-            printf("OPTIONS: Jit invoked for ngen\n");
+            printf("OPTIONS: Jit invoked for AOT\n");
+        }
+
+        if (compIsAsync())
+        {
+            printf("OPTIONS: compilation is an async state machine\n");
         }
     }
 #endif
@@ -3188,7 +3173,7 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
         rbmAllInt |= RBM_HIGHINT;
         rbmIntCalleeTrash |= RBM_HIGHINT;
         cntCalleeTrashInt += CNT_CALLEE_TRASH_HIGHINT;
-        regIntLast = REG_R23;
+        regIntLast = REG_R31;
     }
 #endif // TARGET_AMD64
 
@@ -3222,15 +3207,15 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
 
 bool Compiler::compJitHaltMethod()
 {
-    /* This method returns true when we use an INS_BREAKPOINT to allow us to step into the generated native code */
-    /* Note that this these two "Jit" environment variables also work for ngen images */
+    // This method returns true when we use an INS_BREAKPOINT to allow us to step into the generated native code.
+    // Note that these two "Jit" environment variables also work for AOT images.
 
     if (JitConfig.JitHalt().contains(info.compMethodHnd, info.compClassHnd, &info.compMethodInfo->args))
     {
         return true;
     }
 
-    /* Use this Hash variant when there are a lot of method with the same name and different signatures */
+    // Use this Hash variant when there are a lot of method with the same name and different signatures.
 
     unsigned fJitHashHaltVal = (unsigned)JitConfig.JitHashHalt();
     if ((fJitHashHaltVal != (unsigned)-1) && (fJitHashHaltVal == info.compMethodHash()))
@@ -3709,9 +3694,8 @@ void Compiler::compSetOptimizationLevel()
     {
         theMinOptsValue = true;
     }
-    // For PREJIT we never drop down to MinOpts
-    // unless unless CLFLG_MINOPT is set
-    else if (!opts.jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT))
+    // For AOT we never drop down to MinOpts unless unless CLFLG_MINOPT is set
+    else if (!IsAot())
     {
         if ((unsigned)JitConfig.JitMinOptsCodeSize() < info.compILCodeSize)
         {
@@ -3751,10 +3735,9 @@ void Compiler::compSetOptimizationLevel()
         }
     }
 #else  // !DEBUG
-    // Retail check if we should force Minopts due to the complexity of the method
-    // For PREJIT we never drop down to MinOpts
-    // unless unless CLFLG_MINOPT is set
-    if (!theMinOptsValue && !opts.jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT) &&
+    // Retail check if we should force Minopts due to the complexity of the method.
+    // For AOT we never drop down to MinOpts unless unless CLFLG_MINOPT is set.
+    if (!theMinOptsValue && !IsAot() &&
         ((DEFAULT_MIN_OPTS_CODE_SIZE < info.compILCodeSize) || (DEFAULT_MIN_OPTS_INSTR_COUNT < opts.instrCount) ||
          (DEFAULT_MIN_OPTS_BB_COUNT < fgBBcount) || (DEFAULT_MIN_OPTS_LV_NUM_COUNT < lvaCount) ||
          (DEFAULT_MIN_OPTS_LV_REF_COUNT < opts.lvRefCount)))
@@ -3823,14 +3806,13 @@ _SetMinOpts:
             codeGen->setFrameRequired(true);
 #endif
 
-        if (opts.OptimizationDisabled() ||
-            (opts.jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT) && !IsTargetAbi(CORINFO_NATIVEAOT_ABI)))
+        if (opts.OptimizationDisabled() || IsReadyToRun())
         {
-            // The JIT doesn't currently support loop alignment for prejitted images outside NativeAOT.
+            // The JIT doesn't currently support loop alignment for AOT images outside NativeAOT.
             // (The JIT doesn't know the final address of the code, hence
             // it can't align code based on unknown addresses.)
 
-            codeGen->SetAlignLoops(false); // loop alignment not supported for prejitted code
+            codeGen->SetAlignLoops(false); // loop alignment not supported for AOT code
         }
         else
         {
@@ -4033,9 +4015,8 @@ const ParameterRegisterLocalMapping* Compiler::FindParameterRegisterLocalMapping
         return nullptr;
     }
 
-    for (int i = 0; i < m_paramRegLocalMappings->Height(); i++)
+    for (const ParameterRegisterLocalMapping& mapping : m_paramRegLocalMappings->BottomUpOrder())
     {
-        const ParameterRegisterLocalMapping& mapping = m_paramRegLocalMappings->BottomRef(i);
         if (mapping.RegisterSegment->GetRegister() == reg)
         {
             return &mapping;
@@ -4065,9 +4046,8 @@ const ParameterRegisterLocalMapping* Compiler::FindParameterRegisterLocalMapping
         return nullptr;
     }
 
-    for (int i = 0; i < m_paramRegLocalMappings->Height(); i++)
+    for (const ParameterRegisterLocalMapping& mapping : m_paramRegLocalMappings->BottomUpOrder())
     {
-        const ParameterRegisterLocalMapping& mapping = m_paramRegLocalMappings->BottomRef(i);
         if ((mapping.LclNum == lclNum) && (mapping.Offset == offset))
         {
             return &mapping;
@@ -4404,6 +4384,10 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         return;
     }
 
+    DoPhase(this, PHASE_EARLY_QMARK_EXPANSION, [this]() {
+        return fgExpandQmarkNodes(/*early*/ true);
+    });
+
     // If instrumenting, add block and class probes.
     //
     if (compileFlags->IsSet(JitFlags::JIT_FLAG_BBINSTR))
@@ -4423,6 +4407,10 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
     // partially imported try regions, add OSR step blocks.
     //
     DoPhase(this, PHASE_POST_IMPORT, &Compiler::fgPostImportationCleanup);
+
+    // Capture and restore contexts around the body, if needed.
+    //
+    DoPhase(this, PHASE_ASYNC_SAVE_CONTEXTS, &Compiler::SaveAsyncContexts);
 
     // If we're importing for inlining, we're done.
     if (compIsForInlining())
@@ -4459,6 +4447,10 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
 
     if (opts.OptimizationEnabled())
     {
+        // Try and resolve GDV checks if improved types were found during inlining
+        //
+        DoPhase(this, PHASE_RESOLVE_GDVS, &Compiler::fgResolveGDVs);
+
         // Build post-order and remove dead blocks
         //
         DoPhase(this, PHASE_DFS_BLOCKS1, &Compiler::fgDfsBlocksAndRemove);
@@ -4541,9 +4533,9 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         fgNodeThreading = NodeThreading::AllLocals;
     }
 
-    // Figure out what locals are address-taken.
+    // Simplify local accesses and analyze address exposure.
     //
-    DoPhase(this, PHASE_STR_ADRLCL, &Compiler::fgMarkAddressExposedLocals);
+    DoPhase(this, PHASE_LOCAL_MORPH, &Compiler::fgLocalMorph);
 
     // Optimize away conversions to/from masks in local variables.
     //
@@ -4593,7 +4585,7 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         // Decide the kind of code we want to generate
         fgSetOptions();
 
-        fgExpandQmarkNodes();
+        fgExpandQmarkNodes(/*early*/ false);
 
 #ifdef DEBUG
         compCurBB = nullptr;
@@ -4603,10 +4595,6 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         activePhaseChecks |= PhaseChecks::CHECK_IR;
     };
     DoPhase(this, PHASE_POST_MORPH, postMorphPhase);
-
-    // GS security checks for unsafe buffers
-    //
-    DoPhase(this, PHASE_GS_COOKIE, &Compiler::gsPhase);
 
     if (opts.OptimizationEnabled())
     {
@@ -4626,10 +4614,6 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         //
         DoPhase(this, PHASE_EMPTY_TRY_CATCH_FAULT_2, &Compiler::fgRemoveEmptyTryCatchOrTryFault);
 
-        // Invert loops
-        //
-        DoPhase(this, PHASE_INVERT_LOOPS, &Compiler::optInvertLoops);
-
         // Run some flow graph optimizations (but don't reorder)
         //
         DoPhase(this, PHASE_OPTIMIZE_FLOW, &Compiler::optOptimizeFlow);
@@ -4644,9 +4628,25 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         //
         DoPhase(this, PHASE_DFS_BLOCKS3, &Compiler::fgDfsBlocksAndRemove);
 
+        auto adjustThrowEdgeLikelihoods = [this]() -> PhaseStatus {
+            return ProfileSynthesis::AdjustThrowEdgeLikelihoods(this);
+        };
+
+        // Adjust heuristic-derived edge likelihoods into paths that are known to throw.
+        //
+        DoPhase(this, PHASE_ADJUST_THROW_LIKELIHOODS, adjustThrowEdgeLikelihoods);
+
         // Discover and classify natural loops (e.g. mark iterative loops as such).
         //
         DoPhase(this, PHASE_FIND_LOOPS, &Compiler::optFindLoopsPhase);
+
+        // Re-establish profile consistency, now that inlining and morph have run.
+        //
+        DoPhase(this, PHASE_REPAIR_PROFILE_POST_MORPH, &Compiler::fgRepairProfile);
+
+        // Invert loops
+        //
+        DoPhase(this, PHASE_INVERT_LOOPS, &Compiler::optInvertLoops);
 
         // Scale block weights and mark run rarely blocks.
         //
@@ -4754,7 +4754,7 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
             else
             {
                 // At least do local var liveness; lowering depends on this.
-                fgLocalVarLiveness();
+                fgSsaLiveness();
             }
 
             if (doEarlyProp)
@@ -4857,6 +4857,18 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
                 // update the flowgraph if we modified it during the optimization phase
                 //
                 DoPhase(this, PHASE_OPT_UPDATE_FLOW_GRAPH, &Compiler::fgUpdateFlowGraphPhase);
+
+                // Clean up unreachable blocks.
+                // In opt-repeat builds, RecomputeFlowGraphAnnotations() will call
+                // fgDfsBlocksAndRemove() when resetting annotations between iterations.
+                // To avoid doing this expensive work twice per iteration, only run this
+                // phase on non-optRepeat builds or on the final optRepeat iteration.
+                //
+                if (!opts.optRepeat || (opts.optRepeatIteration == opts.optRepeatCount))
+                {
+                    DoPhase(this, PHASE_OPT_DFS_BLOCKS, &Compiler::fgDfsBlocksAndRemove);
+                    fgInvalidateDfsTree();
+                }
             }
 
             // Iterate if requested, resetting annotations first.
@@ -4906,12 +4918,9 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
     //
     DoPhase(this, PHASE_EMPTY_TRY_CATCH_FAULT_3, &Compiler::fgRemoveEmptyTryCatchOrTryFault);
 
-    if (UsesFunclets())
-    {
-        // Create funclets from the EH handlers.
-        //
-        DoPhase(this, PHASE_CREATE_FUNCLETS, &Compiler::fgCreateFunclets);
-    }
+    // Create funclets from the EH handlers.
+    //
+    DoPhase(this, PHASE_CREATE_FUNCLETS, &Compiler::fgCreateFunclets);
 
     // Expand casts
     DoPhase(this, PHASE_EXPAND_CASTS, &Compiler::fgLateCastExpansion);
@@ -4931,12 +4940,12 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
     // Insert GC Polls
     DoPhase(this, PHASE_INSERT_GC_POLLS, &Compiler::fgInsertGCPolls);
 
-    // Create any throw helper blocks that might be needed
-    //
-    DoPhase(this, PHASE_CREATE_THROW_HELPERS, &Compiler::fgCreateThrowHelperBlocks);
-
     if (opts.OptimizationEnabled())
     {
+        // Conditional to switch conversion, and switch peeling
+        //
+        DoPhase(this, PHASE_SWITCH_RECOGNITION, &Compiler::optRecognizeAndOptimizeSwitchJumps);
+
         // Optimize boolean conditions
         //
         DoPhase(this, PHASE_OPTIMIZE_BOOLS, &Compiler::optOptimizeBools);
@@ -4945,17 +4954,13 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         //
         DoPhase(this, PHASE_IF_CONVERSION, &Compiler::optIfConversion);
 
-        // Conditional to switch conversion, and switch peeling
-        //
-        DoPhase(this, PHASE_SWITCH_RECOGNITION, &Compiler::optRecognizeAndOptimizeSwitchJumps);
-
         // Run flow optimizations before reordering blocks
         //
         DoPhase(this, PHASE_OPTIMIZE_PRE_LAYOUT, &Compiler::optOptimizePreLayout);
 
-        // Run profile repair
+        // Ensure profile is consistent before starting backend phases
         //
-        DoPhase(this, PHASE_REPAIR_PROFILE, &Compiler::fgRepairProfile);
+        DoPhase(this, PHASE_REPAIR_PROFILE_PRE_LAYOUT, &Compiler::fgRepairProfile);
     }
 
 #ifdef DEBUG
@@ -4985,30 +4990,52 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
     // call and register argument info, flowgraph and loop info, etc.
     compJitStats();
 
-#ifdef TARGET_ARM
-    if (compLocallocUsed)
+    if (compIsAsync())
     {
-        // We reserve REG_SAVED_LOCALLOC_SP to store SP on entry for stack unwinding
-        codeGen->regSet.rsMaskResvd |= RBM_SAVED_LOCALLOC_SP;
+        DoPhase(this, PHASE_ASYNC, &Compiler::TransformAsync);
     }
-#endif // TARGET_ARM
+
+    // GS security checks for unsafe buffers
+    //
+    DoPhase(this, PHASE_GS_COOKIE, &Compiler::gsPhase);
+
+#ifdef TARGET_WASM
+    // Make EH continuation flow explicit
+    //
+    DoPhase(this, PHASE_WASM_EH_FLOW, &Compiler::fgWasmEhFlow);
+
+    // Clean up unreachable blocks.
+    //
+    DoPhase(this, PHASE_DFS_BLOCKS_WASM, &Compiler::fgDfsBlocksAndRemove);
+
+    // Transform any strongly connected components into reducible flow.
+    //
+    DoPhase(this, PHASE_WASM_TRANSFORM_SCCS, &Compiler::fgWasmTransformSccs);
+#endif
 
     // Assign registers to variables, etc.
 
-    // Create LinearScan before Lowering, so that Lowering can call LinearScan methods
-    // for determining whether locals are register candidates and (for xarch) whether
+    // Create the RA before Lowering, so that Lowering can call RA methods for
+    // determining whether locals are register candidates and (for xarch) whether
     // a node is a containable memory op.
-    m_pLinearScan = getLinearScanAllocator(this);
+    m_regAlloc = GetRegisterAllocator(this);
 
     // Lower
     //
-    m_pLowering = new (this, CMK_LSRA) Lowering(this, m_pLinearScan); // PHASE_LOWERING
+    m_pLowering = new (this, CMK_LSRA) Lowering(this, m_regAlloc); // PHASE_LOWERING
     m_pLowering->Run();
 
     // Set stack levels and analyze throw helper usage.
     StackLevelSetter stackLevelSetter(this);
     stackLevelSetter.Run();
     m_pLowering->FinalizeOutgoingArgSpace();
+
+#ifdef TARGET_WASM
+    // Determine if a Virtual IP is needed and add code as needed to
+    // keep the Virtual IP updated.
+    //
+    DoPhase(this, PHASE_WASM_VIRTUAL_IP, &Compiler::fgWasmVirtualIP);
+#endif
 
     FinalizeEH();
 
@@ -5017,14 +5044,19 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
 
     // Now that lowering is completed we can proceed to perform register allocation
     //
-    auto linearScanPhase = [this] {
-        m_pLinearScan->doLinearScan();
+    auto regAllocPhase = [this] {
+        m_regAlloc->doRegisterAllocation();
     };
-    DoPhase(this, PHASE_LINEAR_SCAN, linearScanPhase);
+    DoPhase(this, PHASE_LINEAR_SCAN, regAllocPhase);
 
     // Copied from rpPredictRegUse()
     SetFullPtrRegMapRequired(codeGen->GetInterruptible() || !codeGen->isFramePointerUsed());
 
+#ifdef TARGET_WASM
+    // Reorder blocks for wasm and figure out wasm control flow nesting
+    //
+    DoPhase(this, PHASE_WASM_CONTROL_FLOW, &Compiler::fgWasmControlFlow);
+#else
     if (opts.OptimizationEnabled())
     {
         // We won't introduce new blocks from here on out,
@@ -5040,6 +5072,7 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         //
         DoPhase(this, PHASE_DETERMINE_FIRST_COLD_BLOCK, &Compiler::fgDetermineFirstColdBlock);
     }
+#endif // TARGET_WASM
 
 #if FEATURE_LOOP_ALIGN
     // Place loop alignment instructions
@@ -5057,7 +5090,7 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
 #if TRACK_LSRA_STATS
     if (JitConfig.DisplayLsraStats() == 2)
     {
-        m_pLinearScan->dumpLsraStatsCsv(jitstdout());
+        m_regAlloc->dumpLsraStatsCsv(jitstdout());
     }
 #endif // TRACK_LSRA_STATS
 
@@ -5115,6 +5148,7 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
         printf("%4d: JIT compiled %s [%s%s%s%s, IL size=%u, code size=%u%s%s]\n", methodsCompiled, fullName,
                compGetTieringName(), osrBuffer, hasProf ? " with " : "", hasProf ? compGetPgoSourceName() : "",
                info.compILCodeSize, *methodCodeSize, debugPart, metricPart);
+        fflush(jitstdout());
     }
 
     compFunctionTraceEnd(*methodCodePtr, *methodCodeSize, false);
@@ -5139,90 +5173,6 @@ void Compiler::compCompile(void** methodCodePtr, uint32_t* methodCodeSize, JitFl
 //
 void Compiler::FinalizeEH()
 {
-#if defined(FEATURE_EH_WINDOWS_X86)
-
-    // Grab space for exception handling info on the frame
-    //
-    if (!UsesFunclets() && ehNeedsShadowSPslots())
-    {
-        // Recompute the handler nesting levels, as they may have changed.
-        //
-        unsigned const oldHandlerNestingCount = ehMaxHndNestingCount;
-        ehMaxHndNestingCount                  = 0;
-
-        if (compHndBBtabCount > 0)
-        {
-            for (int XTnum = compHndBBtabCount - 1; XTnum >= 0; XTnum--)
-            {
-                EHblkDsc* const HBtab             = &compHndBBtab[XTnum];
-                unsigned const  enclosingHndIndex = HBtab->ebdEnclosingHndIndex;
-
-                if (enclosingHndIndex != EHblkDsc::NO_ENCLOSING_INDEX)
-                {
-                    EHblkDsc* const enclosingHBtab  = &compHndBBtab[enclosingHndIndex];
-                    unsigned const  newNestingLevel = enclosingHBtab->ebdHandlerNestingLevel + 1;
-                    HBtab->ebdHandlerNestingLevel   = (unsigned short)newNestingLevel;
-
-                    if (newNestingLevel > ehMaxHndNestingCount)
-                    {
-                        ehMaxHndNestingCount = newNestingLevel;
-                    }
-                }
-                else
-                {
-                    HBtab->ebdHandlerNestingLevel = 0;
-                }
-            }
-
-            // When there is EH, we need to record nesting level + 1
-            //
-            ehMaxHndNestingCount++;
-        }
-
-        if (oldHandlerNestingCount != ehMaxHndNestingCount)
-        {
-            JITDUMP("Finalize EH: max handler nesting count now %u (was %u)\n", oldHandlerNestingCount,
-                    ehMaxHndNestingCount);
-        }
-
-        // The first slot is reserved for ICodeManager::FixContext(ppEndRegion)
-        // ie. the offset of the end-of-last-executed-filter
-        unsigned slotsNeeded = 1;
-
-        unsigned handlerNestingLevel = ehMaxHndNestingCount;
-
-        if (opts.compDbgEnC && (handlerNestingLevel < (unsigned)MAX_EnC_HANDLER_NESTING_LEVEL))
-            handlerNestingLevel = (unsigned)MAX_EnC_HANDLER_NESTING_LEVEL;
-
-        slotsNeeded += handlerNestingLevel;
-
-        // For a filter (which can be active at the same time as a catch/finally handler)
-        slotsNeeded++;
-        // For zero-termination of the shadow-Stack-pointer chain
-        slotsNeeded++;
-
-        lvaShadowSPslotsVar = lvaGrabTempWithImplicitUse(false DEBUGARG("lvaShadowSPslotsVar"));
-        lvaSetStruct(lvaShadowSPslotsVar, typGetBlkLayout(slotsNeeded * TARGET_POINTER_SIZE), false);
-        lvaSetVarAddrExposed(lvaShadowSPslotsVar DEBUGARG(AddressExposedReason::EXTERNALLY_VISIBLE_IMPLICITLY));
-    }
-
-    // Build up a mapping from EH IDs to EHblkDsc*
-    //
-    assert(m_EHIDtoEHblkDsc == nullptr);
-
-    if (compHndBBtabCount > 0)
-    {
-        m_EHIDtoEHblkDsc = new (getAllocator()) EHIDtoEHblkDscMap(getAllocator());
-
-        for (unsigned XTnum = 0; XTnum < compHndBBtabCount; XTnum++)
-        {
-            EHblkDsc* const HBtab = &compHndBBtab[XTnum];
-            m_EHIDtoEHblkDsc->Set(HBtab->ebdID, HBtab);
-        }
-    }
-
-#endif // FEATURE_EH_WINDOWS_X86
-
     // We should not make any more alterations to the EH table structure.
     //
     ehTableFinalized = true;
@@ -5290,15 +5240,13 @@ bool Compiler::shouldAlignLoop(FlowGraphNaturalLoop* loop, BasicBlock* top)
 
     assert(!top->IsFirst());
 
-    if (UsesCallFinallyThunks() && top->Prev()->KindIs(BBJ_CALLFINALLY))
+    if (top->Prev()->KindIs(BBJ_CALLFINALLY))
     {
         // It must be a retless BBJ_CALLFINALLY if we get here.
         assert(!top->Prev()->isBBCallFinallyPair());
 
-        // If the block before the loop start is a retless BBJ_CALLFINALLY
-        // with UsesCallFinallyThunks, we can't add alignment
-        // because it will affect reported EH region range. For x86 (where
-        // !UsesCallFinallyThunks), we can allow this.
+        // If the block before the loop start is a retless BBJ_CALLFINALLY,
+        // we can't add alignment because it will affect reported EH region range.
 
         JITDUMP("Skipping alignment for " FMT_LP "; its top block follows a CALLFINALLY block\n", loop->GetIndex());
         return false;
@@ -5308,8 +5256,8 @@ bool Compiler::shouldAlignLoop(FlowGraphNaturalLoop* loop, BasicBlock* top)
     {
         // If the previous block is the BBJ_CALLFINALLYRET of a
         // BBJ_CALLFINALLY/BBJ_CALLFINALLYRET pair, then we can't add alignment
-        // because we can't add instructions in that block. In the
-        // UsesCallFinallyThunks case, it would affect the reported EH, as above.
+        // because we can't add instructions in that block.
+        // It would affect the reported EH, as above.
         JITDUMP("Skipping alignment for " FMT_LP "; its top block follows a CALLFINALLY/ALWAYS pair\n",
                 loop->GetIndex());
         return false;
@@ -5651,7 +5599,7 @@ void Compiler::SplitTreesRemoveCommas()
 //
 void Compiler::generatePatchpointInfo()
 {
-    if (!doesMethodHavePatchpoints() && !doesMethodHavePartialCompilationPatchpoints())
+    if (!doesMethodHavePatchpoints())
     {
         // Nothing to report
         return;
@@ -5674,8 +5622,8 @@ void Compiler::generatePatchpointInfo()
     // offset.
 
 #if defined(TARGET_AMD64)
-    // We add +TARGET_POINTER_SIZE here is to account for the slot that Jit_Patchpoint
-    // creates when it simulates calling the OSR method (the "pseudo return address" slot).
+    // We add +TARGET_POINTER_SIZE here to account for the return address slot that the OSR method prolog
+    // pushes on entry (the "pseudo return address" slot) to make the stack unaligned.
     // This is effectively a new slot at the bottom of the Tier0 frame.
     //
     const int totalFrameSize = codeGen->genTotalFrameSize() + TARGET_POINTER_SIZE;
@@ -5767,17 +5715,46 @@ void Compiler::generatePatchpointInfo()
                 patchpointInfo->MonitorAcquiredOffset());
     }
 
-#if defined(TARGET_AMD64)
+    if (lvaAsyncExecutionContextVar != BAD_VAR_NUM)
+    {
+        LclVarDsc* const varDsc = lvaGetDesc(lvaAsyncExecutionContextVar);
+        patchpointInfo->SetAsyncExecutionContextOffset(varDsc->GetStackOffset() + offsetAdjust);
+        JITDUMP("--OSR-- async execution context V%02u virtual offset is %d\n", lvaAsyncExecutionContextVar,
+                patchpointInfo->AsyncExecutionContextOffset());
+    }
+
+    if (lvaAsyncSynchronizationContextVar != BAD_VAR_NUM)
+    {
+        LclVarDsc* const varDsc = lvaGetDesc(lvaAsyncSynchronizationContextVar);
+        patchpointInfo->SetAsyncSynchronizationContextOffset(varDsc->GetStackOffset() + offsetAdjust);
+        JITDUMP("--OSR-- async synchronization context V%02u virtual offset is %d\n", lvaAsyncSynchronizationContextVar,
+                patchpointInfo->AsyncSynchronizationContextOffset());
+    }
+
     // Record callee save registers.
-    // Currently only needed for x64.
     //
     regMaskTP rsPushRegs = codeGen->regSet.rsGetModifiedCalleeSavedRegsMask();
     rsPushRegs |= RBM_FPBASE;
-    patchpointInfo->SetCalleeSaveRegisters((uint64_t)rsPushRegs);
-    JITDUMP("--OSR-- Tier0 callee saves: ");
-    JITDUMPEXEC(dspRegMask((regMaskTP)patchpointInfo->CalleeSaveRegisters()));
-    JITDUMP("\n");
+#if defined(TARGET_ARM64)
+    rsPushRegs |= RBM_LR;
+#elif defined(TARGET_LOONGARCH64)
+    rsPushRegs |= RBM_RA;
+#elif defined(TARGET_RISCV64)
+    rsPushRegs |= RBM_RA;
 #endif
+
+#ifdef TARGET_ARM64
+    // For arm64 we communicate whether fp/lr are stored with the callee saves in this mask.
+    if (!codeGen->IsSaveFpLrWithAllCalleeSavedRegisters())
+    {
+        rsPushRegs &= ~(RBM_FP | RBM_LR);
+    }
+#endif
+
+    patchpointInfo->SetCalleeSaveRegisters((uint64_t)rsPushRegs.getLow());
+    JITDUMP("--OSR-- Tier0 callee saves: ");
+    JITDUMPEXEC(dspRegMask(regMaskTP((regMaskSmall)patchpointInfo->CalleeSaveRegisters())));
+    JITDUMP("\n");
 
     // Register this with the runtime.
     info.compCompHnd->setPatchpointInfo(patchpointInfo);
@@ -5892,10 +5869,10 @@ bool Compiler::skipMethod()
 
 /*****************************************************************************/
 
-int Compiler::compCompile(CORINFO_MODULE_HANDLE classPtr,
-                          void**                methodCodePtr,
-                          uint32_t*             methodCodeSize,
-                          JitFlags*             compileFlags)
+int Compiler::compCompileAfterInit(CORINFO_MODULE_HANDLE classPtr,
+                                   void**                methodCodePtr,
+                                   uint32_t*             methodCodeSize,
+                                   JitFlags*             compileFlags)
 {
     // compInit should have set these already.
     noway_assert(info.compMethodInfo != nullptr);
@@ -5986,6 +5963,7 @@ int Compiler::compCompile(CORINFO_MODULE_HANDLE classPtr,
 
     if (enableAvailableIsas)
     {
+        CORINFO_InstructionSetFlags currentInstructionSetFlags = compileFlags->GetInstructionSetFlags();
         CORINFO_InstructionSetFlags instructionSetFlags;
 
         // We need to assume, by default, that all flags coming from the VM are invalid.
@@ -5999,15 +5977,27 @@ int Compiler::compCompile(CORINFO_MODULE_HANDLE classPtr,
         // needing to have the hardware in question.
 
 #if defined(TARGET_ARM64)
-        if (JitConfig.EnableHWIntrinsic() != 0)
+        if (info.compMatchedVM)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_ArmBase);
+            // Keep the existing VectorT* ISAs.
+            if (currentInstructionSetFlags.HasInstructionSet(InstructionSet_VectorT128))
+            {
+                instructionSetFlags.AddInstructionSet(InstructionSet_VectorT128);
+            }
+
+#ifdef DEBUG
+            if (JitConfig.JitUseScalableVectorT() &&
+                currentInstructionSetFlags.HasInstructionSet(InstructionSet_VectorT))
+            {
+                // Vector<T> will use SVE instead of NEON.
+                instructionSetFlags.RemoveInstructionSet(InstructionSet_VectorT128);
+                instructionSetFlags.AddInstructionSet(InstructionSet_VectorT);
+            }
+#endif
         }
 
-        if (JitConfig.EnableArm64AdvSimd() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AdvSimd);
-        }
+        instructionSetFlags.AddInstructionSet(InstructionSet_ArmBase);
+        instructionSetFlags.AddInstructionSet(InstructionSet_AdvSimd);
 
         if (JitConfig.EnableArm64Aes() != 0)
         {
@@ -6053,41 +6043,55 @@ int Compiler::compCompile(CORINFO_MODULE_HANDLE classPtr,
         {
             instructionSetFlags.AddInstructionSet(InstructionSet_Sve);
         }
+
+        if (JitConfig.EnableArm64Sve2() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_Sve2);
+        }
+
+        if (JitConfig.EnableArm64Sha3() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_Sha3);
+        }
+
+        if (JitConfig.EnableArm64Sm4() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_Sm4);
+        }
+
+        if (JitConfig.EnableArm64SveAes() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_SveAes);
+        }
+
+        if (JitConfig.EnableArm64SveSha3() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_SveSha3);
+        }
+
+        if (JitConfig.EnableArm64SveSm4() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_SveSm4);
+        }
 #elif defined(TARGET_XARCH)
-        if (JitConfig.EnableHWIntrinsic() != 0)
+        if (info.compMatchedVM)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_X86Base);
+            // Keep the existing VectorT* ISAs.
+            if (currentInstructionSetFlags.HasInstructionSet(InstructionSet_VectorT128))
+            {
+                instructionSetFlags.AddInstructionSet(InstructionSet_VectorT128);
+            }
+            if (currentInstructionSetFlags.HasInstructionSet(InstructionSet_VectorT256))
+            {
+                instructionSetFlags.AddInstructionSet(InstructionSet_VectorT256);
+            }
+            if (currentInstructionSetFlags.HasInstructionSet(InstructionSet_VectorT512))
+            {
+                instructionSetFlags.AddInstructionSet(InstructionSet_VectorT512);
+            }
         }
 
-        if (JitConfig.EnableSSE() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_SSE);
-        }
-
-        if (JitConfig.EnableSSE2() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_SSE2);
-        }
-
-        if ((JitConfig.EnableSSE3() != 0) && (JitConfig.EnableSSE3_4() != 0))
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_SSE3);
-        }
-
-        if (JitConfig.EnableSSSE3() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_SSSE3);
-        }
-
-        if (JitConfig.EnableSSE41() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_SSE41);
-        }
-
-        if (JitConfig.EnableSSE42() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_SSE42);
-        }
+        instructionSetFlags.AddInstructionSet(InstructionSet_X86Base);
 
         if (JitConfig.EnableAVX() != 0)
         {
@@ -6099,24 +6103,60 @@ int Compiler::compCompile(CORINFO_MODULE_HANDLE classPtr,
             instructionSetFlags.AddInstructionSet(InstructionSet_AVX2);
         }
 
+        if (JitConfig.EnableAVX512() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512);
+        }
+
+        if (JitConfig.EnableAVX512v2() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512v2);
+        }
+
+        if (JitConfig.EnableAVX512v3() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512v3);
+        }
+
+        if (JitConfig.EnableAVX10v1() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_AVX10v1);
+        }
+
+        if (JitConfig.EnableAVX10v2() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_AVX10v2);
+        }
+
+        if (JitConfig.EnableAPX() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_APX);
+        }
+
         if (JitConfig.EnableAES() != 0)
         {
             instructionSetFlags.AddInstructionSet(InstructionSet_AES);
+
+            if (JitConfig.EnableVAES() != 0)
+            {
+                instructionSetFlags.AddInstructionSet(InstructionSet_AES_V256);
+                instructionSetFlags.AddInstructionSet(InstructionSet_AES_V512);
+            }
         }
 
-        if (JitConfig.EnableBMI1() != 0)
+        if (JitConfig.EnableAVX512VP2INTERSECT() != 0)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_BMI1);
+            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512VP2INTERSECT);
         }
 
-        if (JitConfig.EnableBMI2() != 0)
+        if (JitConfig.EnableAVXIFMA() != 0)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_BMI2);
+            instructionSetFlags.AddInstructionSet(InstructionSet_AVXIFMA);
         }
 
-        if (JitConfig.EnableFMA() != 0)
+        if (JitConfig.EnableAVXVNNI() != 0)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_FMA);
+            instructionSetFlags.AddInstructionSet(InstructionSet_AVXVNNI);
         }
 
         if (JitConfig.EnableGFNI() != 0)
@@ -6126,93 +6166,31 @@ int Compiler::compCompile(CORINFO_MODULE_HANDLE classPtr,
             instructionSetFlags.AddInstructionSet(InstructionSet_GFNI_V512);
         }
 
-        if (JitConfig.EnableLZCNT() != 0)
+        if (JitConfig.EnableSHA() != 0)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_LZCNT);
+            instructionSetFlags.AddInstructionSet(InstructionSet_SHA);
         }
 
-        if (JitConfig.EnablePCLMULQDQ() != 0)
+        if (JitConfig.EnableWAITPKG() != 0)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_PCLMULQDQ);
+            instructionSetFlags.AddInstructionSet(InstructionSet_WAITPKG);
         }
 
-        if (JitConfig.EnableVPCLMULQDQ() != 0)
+        if (JitConfig.EnableX86Serialize() != 0)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_PCLMULQDQ_V256);
-            instructionSetFlags.AddInstructionSet(InstructionSet_PCLMULQDQ_V512);
+            instructionSetFlags.AddInstructionSet(InstructionSet_X86Serialize);
+        }
+#elif defined(TARGET_RISCV64)
+        instructionSetFlags.AddInstructionSet(InstructionSet_RiscV64Base);
+
+        if (JitConfig.EnableRiscV64Zba() != 0)
+        {
+            instructionSetFlags.AddInstructionSet(InstructionSet_Zba);
         }
 
-        if (JitConfig.EnablePOPCNT() != 0)
+        if (JitConfig.EnableRiscV64Zbb() != 0)
         {
-            instructionSetFlags.AddInstructionSet(InstructionSet_POPCNT);
-        }
-
-        if (JitConfig.EnableAVXVNNI() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVXVNNI);
-        }
-
-        if (JitConfig.EnableAVX512F() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512F);
-            instructionSetFlags.AddInstructionSet(InstructionSet_EVEX);
-        }
-
-        if (JitConfig.EnableAVX512F_VL() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512F_VL);
-        }
-
-        if (JitConfig.EnableAVX512BW() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512BW);
-        }
-
-        if (JitConfig.EnableAVX512BW_VL() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512BW_VL);
-        }
-
-        if (JitConfig.EnableAVX512CD() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512CD);
-        }
-
-        if (JitConfig.EnableAVX512CD_VL() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512CD_VL);
-        }
-
-        if (JitConfig.EnableAVX512DQ() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512DQ);
-        }
-
-        if (JitConfig.EnableAVX512DQ_VL() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512DQ_VL);
-        }
-
-        if (JitConfig.EnableAVX512VBMI() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512VBMI);
-        }
-
-        if (JitConfig.EnableAVX512VBMI_VL() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX512VBMI_VL);
-        }
-
-        if (JitConfig.EnableAVX10v1() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX10v1);
-            instructionSetFlags.AddInstructionSet(InstructionSet_AVX10v1_V512);
-            instructionSetFlags.AddInstructionSet(InstructionSet_EVEX);
-        }
-
-        if (JitConfig.EnableAPX() != 0)
-        {
-            instructionSetFlags.AddInstructionSet(InstructionSet_APX);
+            instructionSetFlags.AddInstructionSet(InstructionSet_Zbb);
         }
 #endif
 
@@ -6410,11 +6388,9 @@ void Compiler::compCompileFinish()
 
 #if MEASURE_MEM_ALLOC
     {
-        compArenaAllocator->finishMemStats();
+        JitMemStatsInfo::finishMemStats(compArenaAllocator);
         memAllocHist.record((unsigned)((compArenaAllocator->getTotalBytesAllocated() + 1023) / 1024));
         memUsedHist.record((unsigned)((compArenaAllocator->getTotalBytesUsed() + 1023) / 1024));
-
-        Metrics.BytesAllocated = (int64_t)compArenaAllocator->getTotalBytesUsed();
     }
 
 #ifdef DEBUG
@@ -6425,6 +6401,11 @@ void Compiler::compCompileFinish()
     }
 #endif // DEBUG
 #endif // MEASURE_MEM_ALLOC
+
+    if (JitConfig.JitReportMetrics())
+    {
+        Metrics.BytesAllocated = (int64_t)compArenaAllocator->getTotalBytesUsed();
+    }
 
 #if LOOP_HOIST_STATS
     AddLoopHoistStats();
@@ -6449,8 +6430,8 @@ void Compiler::compCompileFinish()
         (info.compLocalsCount <= 32) && !opts.MinOpts() && // We may have too many local variables, etc
         (getJitStressLevel() == 0) &&                      // We need extra memory for stress
         !opts.optRepeat &&                                 // We need extra memory to repeat opts
-        !compArenaAllocator->bypassHostAllocator() && // ArenaAllocator::getDefaultPageSize() is artificially low for
-                                                      // DirectAlloc
+        !JitMemKindTraits::bypassHostAllocator() && // ArenaAllocator::getDefaultPageSize() is artificially low for
+                                                    // DirectAlloc
         // Factor of 2x is because data-structures are bigger under DEBUG
         (compArenaAllocator->getTotalBytesAllocated() > (2 * ArenaAllocator::getDefaultPageSize())) &&
         // RyuJIT backend needs memory tuning! TODO-Cleanup: remove this case when memory tuning is complete.
@@ -6629,7 +6610,10 @@ void Compiler::compCompileFinish()
     }
 
     JITDUMP("Final metrics:\n");
-    Metrics.report(this);
+    if (JitConfig.JitReportMetrics())
+    {
+        Metrics.report(this);
+    }
     DBEXEC(verbose, Metrics.dump());
 
     if (verbose)
@@ -6650,91 +6634,12 @@ void Compiler::compCompileFinish()
     }
 #endif // TRACK_ENREG_STATS
 
-    // Only call _DbgBreakCheck when we are jitting, not when we are ngen-ing
-    // For ngen the int3 or breakpoint instruction will be right at the
-    // start of the ngen method and we will stop when we execute it.
-    //
-    if (!opts.jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT))
+#else  // DEBUG
+    if (JitConfig.JitReportMetrics())
     {
-        if (compJitHaltMethod())
-        {
-#if !defined(HOST_UNIX)
-            // TODO-UNIX: re-enable this when we have an OS that supports a pop-up dialog
-
-            // Don't do an assert, but just put up the dialog box so we get just-in-time debugger
-            // launching.  When you hit 'retry' it will continue and naturally stop at the INT 3
-            // that the JIT put in the code
-            _DbgBreakCheck(__FILE__, __LINE__, "JitHalt");
-#endif
-        }
+        Metrics.report(this);
     }
-#endif // DEBUG
-}
-
-#ifdef PSEUDORANDOM_NOP_INSERTION
-// this is zlib adler32 checksum.  source came from windows base
-
-#define BASE 65521L // largest prime smaller than 65536
-#define NMAX 5552
-// NMAX is the largest n such that 255n(n+1)/2 + (n+1)(BASE-1) <= 2^32-1
-
-#define DO1(buf, i)                                                                                                    \
-    {                                                                                                                  \
-        s1 += buf[i];                                                                                                  \
-        s2 += s1;                                                                                                      \
-    }
-#define DO2(buf, i)                                                                                                    \
-    DO1(buf, i);                                                                                                       \
-    DO1(buf, i + 1);
-#define DO4(buf, i)                                                                                                    \
-    DO2(buf, i);                                                                                                       \
-    DO2(buf, i + 2);
-#define DO8(buf, i)                                                                                                    \
-    DO4(buf, i);                                                                                                       \
-    DO4(buf, i + 4);
-#define DO16(buf)                                                                                                      \
-    DO8(buf, 0);                                                                                                       \
-    DO8(buf, 8);
-
-unsigned adler32(unsigned adler, char* buf, unsigned int len)
-{
-    unsigned int s1 = adler & 0xffff;
-    unsigned int s2 = (adler >> 16) & 0xffff;
-    int          k;
-
-    if (buf == NULL)
-        return 1L;
-
-    while (len > 0)
-    {
-        k = len < NMAX ? len : NMAX;
-        len -= k;
-        while (k >= 16)
-        {
-            DO16(buf);
-            buf += 16;
-            k -= 16;
-        }
-        if (k != 0)
-            do
-            {
-                s1 += *buf++;
-                s2 += s1;
-            } while (--k);
-        s1 %= BASE;
-        s2 %= BASE;
-    }
-    return (s2 << 16) | s1;
-}
-#endif
-
-unsigned getMethodBodyChecksum(_In_z_ char* code, int size)
-{
-#ifdef PSEUDORANDOM_NOP_INSERTION
-    return adler32(0, code, size);
-#else
-    return 0;
-#endif
+#endif // !DEBUG
 }
 
 int Compiler::compCompileHelper(CORINFO_MODULE_HANDLE classPtr,
@@ -6763,10 +6668,7 @@ int Compiler::compCompileHelper(CORINFO_MODULE_HANDLE classPtr,
     }
     else
     {
-        info.compFlags = info.compCompHnd->getMethodAttribs(info.compMethodHnd);
-#ifdef PSEUDORANDOM_NOP_INSERTION
-        info.compChecksum = getMethodBodyChecksum((char*)methodInfo->ILCode, methodInfo->ILCodeSize);
-#endif
+        info.compFlags    = info.compCompHnd->getMethodAttribs(info.compMethodHnd);
         compInlineContext = m_inlineStrategy->GetRootContext();
     }
 
@@ -6921,9 +6823,9 @@ int Compiler::compCompileHelper(CORINFO_MODULE_HANDLE classPtr,
 
     const bool forceInline = !!(info.compFlags & CORINFO_FLG_FORCEINLINE);
 
-    if (!compIsForInlining() && opts.jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT))
+    if (!compIsForInlining() && IsAot())
     {
-        // We're prejitting the root method. We also will analyze it as
+        // We're AOT compiling the root method. We also will analyze it as
         // a potential inline candidate.
         InlineResult prejitResult(this, info.compMethodHnd, "prejit");
 
@@ -7077,6 +6979,22 @@ int Compiler::compCompileHelper(CORINFO_MODULE_HANDLE classPtr,
     }
 
     compSetOptimizationLevel();
+
+#ifdef DEBUG
+    if (JitConfig.JitInstrumentIfOptimizing() && opts.OptimizationEnabled() && !IsReadyToRun())
+    {
+        // Optionally disable by range
+        //
+        static ConfigMethodRange JitInstrumentIfOptimizingRange;
+        JitInstrumentIfOptimizingRange.EnsureInit(JitConfig.JitInstrumentIfOptimizingRange());
+        const unsigned hash = impInlineRoot()->info.compMethodHash();
+        if (JitInstrumentIfOptimizingRange.Contains(hash))
+        {
+            JITDUMP("\nEnabling instrumentation\n");
+            opts.jitFlags->Set(JitFlags::JIT_FLAG_BBINSTR);
+        }
+    }
+#endif
 
     if ((JitConfig.JitDisasmOnlyOptimized() != 0) && (!opts.OptimizationEnabled()))
     {
@@ -7770,12 +7688,7 @@ START:
             pParam->pPrevComp = JitTls::GetCompiler();
             JitTls::SetCompiler(pParam->pComp);
 
-            // PREFIX_ASSUME gets turned into ASSERT_CHECK and we cannot have it here
-#if defined(_PREFAST_) || defined(_PREFIX_)
-            PREFIX_ASSUME(pParam->pComp != NULL);
-#else
             assert(pParam->pComp != nullptr);
-#endif
 
 #ifdef DEBUG
             pParam->pComp->jitFallbackCompile = pParam->jitFallbackCompile;
@@ -7783,7 +7696,7 @@ START:
 
             // Now generate the code
             pParam->result =
-                pParam->pComp->compCompile(pParam->classPtr, pParam->methodCodePtr, pParam->methodCodeSize, pParam->compileFlags);
+                pParam->pComp->compCompileAfterInit(pParam->classPtr, pParam->methodCodePtr, pParam->methodCodeSize, pParam->compileFlags);
         }
         finallyErrorTrap()
         {
@@ -7826,7 +7739,8 @@ START:
     result = param.result;
 
 if (!inlineInfo &&
-    (result == CORJIT_INTERNALERROR || result == CORJIT_RECOVERABLEERROR || result == CORJIT_IMPLLIMITATION) &&
+    (result == CORJIT_INTERNALERROR || result == CORJIT_RECOVERABLEERROR || result == CORJIT_IMPLLIMITATION ||
+     result == CORJIT_R2R_UNSUPPORTED) &&
     !jitFallbackCompile)
 {
     // If we failed the JIT, reattempt with debuggable code.
@@ -8103,7 +8017,7 @@ Compiler::NodeToIntMap* Compiler::FindReachableNodesInNodeTestData()
                 TestLabelAndNum tlAndN;
 
                 // For call nodes, translate late args to what they stand for.
-                if (tree->OperGet() == GT_CALL)
+                if (tree->OperIs(GT_CALL))
                 {
                     GenTreeCall* call = tree->AsCall();
                     unsigned     i    = 0;
@@ -8224,7 +8138,7 @@ void Compiler::compCallArgStats()
         {
             for (GenTree* const call : stmt->TreeList())
             {
-                if (call->gtOper != GT_CALL)
+                if (!call->OperIs(GT_CALL))
                     continue;
 
                 argNum = regArgNum = regArgDeferred = regArgTemp = regArgConst = regArgLclVar = argDWordNum =
@@ -9193,16 +9107,7 @@ void Compiler::PrintPerMethodLoopHoistStats()
 void Compiler::RecordStateAtEndOfInlining()
 {
 #if defined(DEBUG)
-
-    m_compCyclesAtEndOfInlining    = 0;
-    m_compTickCountAtEndOfInlining = 0;
-    bool b                         = CycleTimer::GetThreadCyclesS(&m_compCyclesAtEndOfInlining);
-    if (!b)
-    {
-        return; // We don't have a thread cycle counter.
-    }
-    m_compTickCountAtEndOfInlining = GetTickCount();
-
+    m_compCyclesAtEndOfInlining = minipal_hires_ticks();
 #endif // defined(DEBUG)
 }
 
@@ -9213,19 +9118,16 @@ void Compiler::RecordStateAtEndOfInlining()
 void Compiler::RecordStateAtEndOfCompilation()
 {
 #if defined(DEBUG)
-
-    // Common portion
     m_compCycles = 0;
-    uint64_t compCyclesAtEnd;
-    bool     b = CycleTimer::GetThreadCyclesS(&compCyclesAtEnd);
-    if (!b)
+
+    int64_t lpCycles = minipal_hires_ticks();
+    if (lpCycles > m_compCyclesAtEndOfInlining)
     {
-        return; // We don't have a thread cycle counter.
+        int64_t lpFreq = minipal_hires_tick_frequency();
+        m_compCycles   = lpCycles - m_compCyclesAtEndOfInlining;
+        m_compCycles *= 1000000;
+        m_compCycles /= lpFreq;
     }
-    assert(compCyclesAtEnd >= m_compCyclesAtEndOfInlining);
-
-    m_compCycles = compCyclesAtEnd - m_compCyclesAtEndOfInlining;
-
 #endif // defined(DEBUG)
 }
 
@@ -9309,7 +9211,7 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
  *      cVars,       dVars          : Display the local variable table (call lvaTableDump()).
  *      cVarsFinal,  dVarsFinal     : Display the local variable table (call lvaTableDump(FINAL_FRAME_LAYOUT)).
  *      cBlockPreds, dBlockPreds    : Display a block's predecessors (call block->dspPreds()).
- *      cBlockSuccs, dBlockSuccs    : Display a block's successors (call block->dspSuccs(compiler)).
+ *      cBlockSuccs, dBlockSuccs    : Display a block's successors (call block->dspSuccs()).
  *      cReach,      dReach         : Display all block reachability (call BlockReachabilitySets::Dump).
  *      cDoms,       dDoms          : Display all block dominators (call FlowGraphDominatorTree::Dump).
  *      cLiveness,   dLiveness      : Display per-block variable liveness (call fgDispBBLiveness()).
@@ -9328,6 +9230,8 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
  * The following don't require a Compiler* to work:
  *      dRegMask                    : Display a regMaskTP (call dspRegMask(mask)).
  *      dBlockList                  : Display a BasicBlockList*.
+ *      dIsa                        : Display a CORINFO_InstructionSet
+ *      dIsaFlags                   : Display a CORINFO_InstructionSetFlags
  *
  * The following find an object in the IR and return it, as well as setting a global variable with the value that can
  * be used in the debugger (e.g., in the watch window, or as a way to get an address for data breakpoints).
@@ -9411,6 +9315,8 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 // Functions which don't require a Compiler*
 #pragma comment(linker, "/include:dRegMask")
 #pragma comment(linker, "/include:dBlockList")
+#pragma comment(linker, "/include:dIsa")
+#pragma comment(linker, "/include:dIsaFlags")
 
 // Functions which search for objects in the IR
 #pragma comment(linker, "/include:dFindTreeInTree")
@@ -9599,7 +9505,7 @@ JITDBGAPI void __cdecl cBlockSuccs(Compiler* comp, BasicBlock* block)
 {
     static unsigned sequenceNumber = 0; // separate calls with a number to indicate this function has been called
     printf("===================================================================== *BlockSuccs %u\n", sequenceNumber++);
-    block->dspSuccs(comp);
+    block->dspSuccs();
 }
 
 JITDBGAPI void __cdecl cReach(Compiler* comp)
@@ -10124,7 +10030,7 @@ JITDBGAPI void __cdecl cTreeFlags(Compiler* comp, GenTree* tree)
         {
             chars += printf("[DONT_CSE]");
         }
-        if (tree->gtFlags & GTF_UNSIGNED)
+        if (tree->IsUnsigned())
         {
             chars += printf("[SMALL_UNSIGNED]");
         }
@@ -10295,6 +10201,41 @@ JITDBGAPI void __cdecl dBlockList(BasicBlockList* list)
     printf("\n");
 }
 
+JITDBGAPI void __cdecl dIsa(const CORINFO_InstructionSet isa)
+{
+    static unsigned sequenceNumber = 0; // separate calls with a number to indicate this function has been called
+    printf("===================================================================== dIsa %u\n", sequenceNumber++);
+    printf("%s\n", InstructionSetToString(isa));
+}
+
+JITDBGAPI void __cdecl dIsaFlags(const CORINFO_InstructionSetFlags& isaFlags)
+{
+    static unsigned sequenceNumber = 0; // separate calls with a number to indicate this function has been called
+    printf("===================================================================== dIsaFlags %u\n", sequenceNumber++);
+    if (isaFlags.IsEmpty())
+    {
+        printf("<empty>\n");
+    }
+    else
+    {
+        bool first = true;
+        // The flags start at '1'. We don't know the last flag, so compute the maximum.
+        // It would be better if CORINFO_InstructionSet defined InstructionSet_FIRST and InstructionSet_LAST,
+        // or even better, if CORINFO_InstructionSetFlags defined an iterator over the instruction sets in the flags.
+        CORINFO_InstructionSet isaFirst = (CORINFO_InstructionSet)1;
+        CORINFO_InstructionSet isaLast  = (CORINFO_InstructionSet)(sizeof(CORINFO_InstructionSetFlags) * 8 - 1);
+        for (CORINFO_InstructionSet isa = isaFirst; isa <= isaLast; isa = (CORINFO_InstructionSet)((int)isa + 1))
+        {
+            if (isaFlags.HasInstructionSet(isa))
+            {
+                printf("%s%s", first ? "" : " ", InstructionSetToString(isa));
+                first = false;
+            }
+        }
+    }
+    printf("\n");
+}
+
 // Global variables available in debug mode.  That are set by debug APIs for finding
 // Trees, Stmts, and/or Blocks using id or bbNum.
 // That can be used in watch window or as a way to get address of fields for data breakpoints.
@@ -10449,7 +10390,7 @@ bool Compiler::killGCRefs(GenTree* tree)
             return true;
         }
 
-        if (call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_JIT_PINVOKE_BEGIN))
+        if (call->IsHelperCall(CORINFO_HELP_JIT_PINVOKE_BEGIN))
         {
             assert(opts.ShouldUsePInvokeHelpers());
             return true;
@@ -10473,7 +10414,7 @@ bool Compiler::killGCRefs(GenTree* tree)
 // Return Value:
 //    true       - this is an OSR compile and this local requires special treatment
 //    false      - not an OSR compile, or not an interesting local for OSR
-
+//
 bool Compiler::lvaIsOSRLocal(unsigned varNum)
 {
     LclVarDsc* const varDsc = lvaGetDesc(varNum);
@@ -10485,7 +10426,8 @@ bool Compiler::lvaIsOSRLocal(unsigned varNum)
         {
             // Sanity check for promoted fields of OSR locals.
             //
-            if (varNum >= info.compLocalsCount)
+            if ((varNum >= info.compLocalsCount) && (varNum != lvaMonAcquired) &&
+                (varNum != lvaAsyncExecutionContextVar) && (varNum != lvaAsyncSynchronizationContextVar))
             {
                 assert(varDsc->lvIsStructField);
                 assert(varDsc->lvParentLcl < info.compLocalsCount);
@@ -10499,6 +10441,37 @@ bool Compiler::lvaIsOSRLocal(unsigned varNum)
 #endif
 
     return varDsc->lvIsOSRLocal;
+}
+
+//------------------------------------------------------------------------
+// lvaOSRLocalTier0FrameOffset:
+//   Get the offset in the tier0 frame for a specified OSR local.
+//
+// Arguments:
+//   varNum - variable of interest
+//
+// Return Value:
+//   The offset into the tier 0 frame.
+//
+int Compiler::lvaOSRLocalTier0FrameOffset(unsigned varNum)
+{
+    assert(lvaIsOSRLocal(varNum));
+
+    if (varNum == lvaMonAcquired)
+    {
+        return info.compPatchpointInfo->MonitorAcquiredOffset();
+    }
+    if (varNum == lvaAsyncExecutionContextVar)
+    {
+        return info.compPatchpointInfo->AsyncExecutionContextOffset();
+    }
+    if (varNum == lvaAsyncSynchronizationContextVar)
+    {
+        return info.compPatchpointInfo->AsyncSynchronizationContextOffset();
+    }
+
+    assert(varNum < info.compPatchpointInfo->NumberOfLocals());
+    return info.compPatchpointInfo->Offset(varNum);
 }
 
 //------------------------------------------------------------------------------
@@ -10534,20 +10507,18 @@ var_types Compiler::gtTypeForNullCheck(GenTree* tree)
 //
 // Arguments:
 //    tree  - the node to change;
-//    block - basic block of the node.
 //
 // Notes:
 //    the function should not be called after lowering for platforms that do not support
 //    emitting NULLCHECK nodes, like arm32. Use `Lowering::TransformUnusedIndirection`
 //    that handles it and calls this function when appropriate.
 //
-void Compiler::gtChangeOperToNullCheck(GenTree* tree, BasicBlock* block)
+void Compiler::gtChangeOperToNullCheck(GenTree* tree)
 {
     assert(tree->OperIs(GT_IND, GT_BLK));
     tree->ChangeOper(GT_NULLCHECK);
     tree->ChangeType(gtTypeForNullCheck(tree));
     tree->SetIndirExceptionFlags(this);
-    block->SetFlags(BBF_HAS_NULLCHECK);
     optMethodFlags |= OMF_HAS_NULLCHECK;
 }
 
@@ -10570,7 +10541,7 @@ const char* Compiler::devirtualizationDetailToString(CORINFO_DEVIRTUALIZATION_DE
         case CORINFO_DEVIRTUALIZATION_SUCCESS:
             return "success";
         case CORINFO_DEVIRTUALIZATION_FAILED_CANON:
-            return "object class was canonical";
+            return "object class or method was canonical";
         case CORINFO_DEVIRTUALIZATION_FAILED_COM:
             return "object class was com";
         case CORINFO_DEVIRTUALIZATION_FAILED_CAST:
@@ -10621,15 +10592,19 @@ const char* Compiler::devirtualizationDetailToString(CORINFO_DEVIRTUALIZATION_DE
 //
 const char* Compiler::printfAlloc(const char* format, ...)
 {
-    char    str[512];
     va_list args;
     va_start(args, format);
-    int result = vsprintf_s(str, ArrLen(str), format, args);
+    int count = _vscprintf(format, args);
     va_end(args);
-    assert((result >= 0) && ((unsigned)result < ArrLen(str)));
 
-    char* resultStr = new (this, CMK_DebugOnly) char[result + 1];
-    memcpy(resultStr, str, (unsigned)result + 1);
+    assert(count >= 0);
+    char* resultStr = new (this, CMK_DebugOnly) char[count + 1];
+
+    va_start(args, format);
+    int result = vsprintf_s(resultStr, count + 1, format, args);
+    va_end(args);
+
+    assert((result >= 0) && (result < (count + 1)));
     return resultStr;
 }
 
@@ -10638,26 +10613,30 @@ const char* Compiler::printfAlloc(const char* format, ...)
 //   Convert a string from UTF16 to UTF8 to be printed to output.
 //
 // Arguments:
-//    utf16String - The string
+//    utf16Src     - source string in UTF16 encoding
+//    utf16SrcLen  - length of the source string in UTF16 encoding
+//    utf8Dst      - destination buffer for the UTF8 string
+//    utf8DstLen   - length of the destination buffer in bytes
 //
-// Returns:
-//    Converted string, or a marker string if conversion failed.
+// Notes:
+//     "<string is too long>" is written to the destination buffer if the
+//     converted string exceeds the buffer size.
 //
-const char* Compiler::convertUtf16ToUtf8ForPrinting(const WCHAR* utf16String)
+void Compiler::convertUtf16ToUtf8ForPrinting(const char16_t* utf16Src,
+                                             size_t          utf16SrcLen,
+                                             char*           utf8Dst,
+                                             size_t          utf8DstLen)
 {
-    const char* utf8Str = "<utf8 conversion failure>";
-    int         utf8Len = WideCharToMultiByte(CP_UTF8, 0, utf16String, -1, nullptr, 0, nullptr, nullptr);
-    if (utf8Len == 0)
+    const CHAR16_T* utf16src      = reinterpret_cast<const CHAR16_T*>(utf16Src);
+    size_t          actualUtf8Len = minipal_get_length_utf16_to_utf8(utf16src, utf16SrcLen, 0);
+    if (actualUtf8Len >= utf8DstLen)
     {
-        char* allocated = new (this, CMK_DebugOnly) char[utf8Len];
-
-        if (WideCharToMultiByte(CP_UTF8, 0, (WCHAR*)utf16String, -1, allocated, utf8Len, nullptr, nullptr) != 0)
-        {
-            utf8Str = allocated;
-        }
+        strcpy_s(utf8Dst, utf8DstLen, "<string is too long>");
+        return;
     }
-
-    return utf8Str;
+    size_t written = minipal_convert_utf16_to_utf8(utf16src, utf16SrcLen, utf8Dst, utf8DstLen, 0);
+    assert(written < utf8DstLen);
+    utf8Dst[written] = '\0';
 }
 
 #endif // defined(DEBUG)
@@ -10668,14 +10647,14 @@ Compiler::EnregisterStats Compiler::s_enregisterStats;
 void Compiler::EnregisterStats::RecordLocal(const LclVarDsc* varDsc)
 {
     m_totalNumberOfVars++;
-    if (varDsc->TypeGet() == TYP_STRUCT)
+    if (varDsc->TypeIs(TYP_STRUCT))
     {
         m_totalNumberOfStructVars++;
     }
     if (!varDsc->lvDoNotEnregister)
     {
         m_totalNumberOfEnregVars++;
-        if (varDsc->TypeGet() == TYP_STRUCT)
+        if (varDsc->TypeIs(TYP_STRUCT))
         {
             m_totalNumberOfStructEnregVars++;
         }
@@ -10806,6 +10785,10 @@ void Compiler::EnregisterStats::RecordLocal(const LclVarDsc* varDsc)
                     m_externallyVisibleImplicitly++;
                     break;
 
+                case AddressExposedReason::SMALL_TYPE_PARTIAL_DEF:
+                    m_smallTypePartialDef++;
+                    break;
+
                 default:
                     unreached();
                     break;
@@ -10902,5 +10885,6 @@ void Compiler::EnregisterStats::Dump(FILE* fout) const
     PRINT_STATS(m_dispatchRetBuf, m_addrExposed);
     PRINT_STATS(m_stressPoisonImplicitByrefs, m_addrExposed);
     PRINT_STATS(m_externallyVisibleImplicitly, m_addrExposed);
+    PRINT_STATS(m_smallTypePartialDef, m_addrExposed);
 }
 #endif // TRACK_ENREG_STATS

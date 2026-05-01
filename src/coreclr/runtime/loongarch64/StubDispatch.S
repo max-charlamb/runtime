@@ -1,21 +1,20 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-#include <unixasmmacros.inc>
-#include "AsmOffsets.inc"
+#include "AsmMacros_Shared.h"
 
 #ifdef FEATURE_CACHED_INTERFACE_DISPATCH
 
     .extern RhpCidResolve
-    .extern RhpUniversalTransition_DebugStepTailCall
+    .extern RhpUniversalTransitionTailCall
 
     // Macro that generates code to check a single cache entry.
     .macro CHECK_CACHE_ENTRY entry
         // Check a single entry in the cache.
-        //  t0  : Cache data structure. Also used for target address jump.
-        //  t1  : Instance MethodTable*
-        //  t2  : Indirection cell address, preserved
-        //  t3  : Trashed
+        //  t0 : Cache data structure. Also used for target address jump.
+        //  t2 : Instance MethodTable*
+        //  t8 : Indirection cell address, preserved
+        //  t3 : Trashed
         ld.d  $t3, $t0, (OFFSETOF__InterfaceDispatchCache__m_rgEntries + (\entry * 16))
         bne  $t1, $t3, 0f
         ld.d  $t0, $t0, (OFFSETOF__InterfaceDispatchCache__m_rgEntries + (\entry * 16) + 8)
@@ -30,8 +29,19 @@
 
     NESTED_ENTRY "RhpInterfaceDispatch\entries", _TEXT, NoHandler
 
-        // t2 holds the indirection cell address. Load the cache pointer.
+        // t8 holds the indirection cell address. Load the cache pointer.
         ld.d  $t0, $t8, OFFSETOF__InterfaceDispatchCell__m_pCache
+
+        // Validate t0 is a cache pointer matching the expected cache size.
+        // This compensates for a race where the stub was updated to expect a larger cache
+        // but we loaded a stale (smaller or non-cache) m_pCache value.
+        // On detection, re-dispatch through the indirection cell to retry with the current
+        // stub and cache pair.
+        andi  $t3, $t0, IDC_CACHE_POINTER_MASK
+        bnez  $t3, LOCAL_LABEL(RaceRetry_\entries)
+        ld.w  $t3, $t0, OFFSETOF__InterfaceDispatchCache__m_cEntries
+        ori   $t4, $zero, \entries
+        bne   $t3, $t4, LOCAL_LABEL(RaceRetry_\entries)
 
         // Load the MethodTable from the object instance in a0.
         ALTERNATE_ENTRY RhpInterfaceDispatchAVLocation\entries
@@ -45,8 +55,13 @@
         .set CurrentEntry, CurrentEntry + 1
     .endr
 
-        // t2 still contains the indirection cell address.
+        // t8 still contains the indirection cell address.
         b  C_FUNC(RhpInterfaceDispatchSlow)
+
+LOCAL_LABEL(RaceRetry_\entries):
+        // Race detected: re-dispatch through the indirection cell
+        ld.d  $t0, $t8, 0
+        jirl  $r0, $t0, 0
 
     NESTED_END "RhpInterfaceDispatch\entries", _TEXT
 
@@ -87,12 +102,12 @@
 // Use universal transition helper to allow an exception to flow out of resolution.
 //
     LEAF_ENTRY RhpInterfaceDispatchSlow, _TEXT
-        // t2 contains the interface dispatch cell address.
+        // t8 contains the interface dispatch cell address.
         // Calling convention of the universal thunk is:
-        //  t7: target address for the thunk to call
-        //  t8: parameter of the thunk's target
+        // t7: target address for the thunk to call
+        // t8: parameter of the thunk's target
         PREPARE_EXTERNAL_VAR RhpCidResolve, $t7
-        b  C_FUNC(RhpUniversalTransition_DebugStepTailCall)
+        b  C_FUNC(RhpUniversalTransitionTailCall)
     LEAF_END RhpInterfaceDispatchSlow, _TEXT
 
 #endif // FEATURE_CACHED_INTERFACE_DISPATCH

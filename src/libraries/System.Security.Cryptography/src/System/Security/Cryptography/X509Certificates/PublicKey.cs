@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Formats.Asn1;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -52,11 +53,80 @@ namespace System.Security.Cryptography.X509Certificates
         /// <see cref="AsymmetricAlgorithm.ExportSubjectPublicKeyInfo" /> has not been overridden
         /// in a derived class.
         /// </exception>
-        public PublicKey(AsymmetricAlgorithm key)
+        public PublicKey(AsymmetricAlgorithm key) : this(key.ExportSubjectPublicKeyInfo())
         {
-            byte[] subjectPublicKey = key.ExportSubjectPublicKeyInfo();
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PublicKey" /> class
+        /// using SubjectPublicKeyInfo from an <see cref="MLKem" />.
+        /// </summary>
+        /// <param name="key">
+        /// An <see cref="MLKem" /> key to obtain the SubjectPublicKeyInfo from.
+        /// </param>
+        /// <exception cref="CryptographicException">
+        /// The SubjectPublicKeyInfo could not be decoded. The
+        /// <see cref="MLKem.ExportSubjectPublicKeyInfo" /> must return a
+        /// valid ASN.1-DER encoded X.509 SubjectPublicKeyInfo.
+        /// </exception>
+        public PublicKey(MLKem key) : this(key.ExportSubjectPublicKeyInfo())
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PublicKey" /> class
+        /// using SubjectPublicKeyInfo from an <see cref="MLDsa" />.
+        /// </summary>
+        /// <param name="key">
+        /// An <see cref="MLDsa" /> key to obtain the SubjectPublicKeyInfo from.
+        /// </param>
+        /// <exception cref="CryptographicException">
+        /// The SubjectPublicKeyInfo could not be decoded. The
+        /// <see cref="MLDsa.ExportSubjectPublicKeyInfo" /> must return a
+        /// valid ASN.1-DER encoded X.509 SubjectPublicKeyInfo.
+        /// </exception>
+        public PublicKey(MLDsa key) : this(key.ExportSubjectPublicKeyInfo())
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PublicKey" /> class
+        /// using SubjectPublicKeyInfo from an <see cref="SlhDsa" />.
+        /// </summary>
+        /// <param name="key">
+        /// An <see cref="SlhDsa" /> key to obtain the SubjectPublicKeyInfo from.
+        /// </param>
+        /// <exception cref="CryptographicException">
+        /// The SubjectPublicKeyInfo could not be decoded. The
+        /// <see cref="SlhDsa.ExportSubjectPublicKeyInfo" /> must return a
+        /// valid ASN.1-DER encoded X.509 SubjectPublicKeyInfo.
+        /// </exception>
+        [Experimental(Experimentals.PostQuantumCryptographyDiagId, UrlFormat = Experimentals.SharedUrlFormat)]
+        public PublicKey(SlhDsa key) : this(key.ExportSubjectPublicKeyInfo())
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PublicKey" /> class
+        /// using SubjectPublicKeyInfo from an <see cref="CompositeMLDsa" />.
+        /// </summary>
+        /// <param name="key">
+        /// An <see cref="CompositeMLDsa" /> key to obtain the SubjectPublicKeyInfo from.
+        /// </param>
+        /// <exception cref="CryptographicException">
+        /// The SubjectPublicKeyInfo could not be decoded. The
+        /// <see cref="CompositeMLDsa.ExportSubjectPublicKeyInfo" /> must return a
+        /// valid ASN.1-DER encoded X.509 SubjectPublicKeyInfo.
+        /// </exception>
+        [Experimental(Experimentals.PostQuantumCryptographyDiagId)]
+        public PublicKey(CompositeMLDsa key) : this(key.ExportSubjectPublicKeyInfo())
+        {
+        }
+
+        private PublicKey(byte[] subjectPublicKeyInfo)
+        {
             DecodeSubjectPublicKeyInfo(
-                subjectPublicKey,
+                subjectPublicKeyInfo,
                 out Oid localOid,
                 out AsnEncodedData? localParameters,
                 out AsnEncodedData localKeyValue);
@@ -273,6 +343,93 @@ namespace System.Security.Cryptography.X509Certificates
             }
         }
 
+        /// <summary>
+        ///   Gets the <see cref="MLKem" /> public key, or <see langword="null" />
+        ///   if the key is not an ML-KEM key.
+        /// </summary>
+        /// <returns>
+        ///   The public key, or <see langword="null" /> if the key is not an ML-KEM key.
+        /// </returns>
+        /// <exception cref="PlatformNotSupportedException">
+        ///   The object represents an ML-KEM public key, but the platform does not support the algorithm.
+        /// </exception>
+        /// <exception cref="CryptographicException">
+        ///   The key contents are corrupt or could not be read successfully.
+        /// </exception>
+        [UnsupportedOSPlatform("browser")]
+        public MLKem? GetMLKemPublicKey()
+        {
+            if (MLKemAlgorithm.FromOid(_oid.Value) is null)
+                return null;
+
+            return EncodeSubjectPublicKeyInfo().Encode(MLKem.ImportSubjectPublicKeyInfo);
+        }
+
+        /// <summary>
+        ///   Gets the <see cref="MLDsa"/> public key, or <see langword="null" />
+        ///   if the key is not an ML-DSA key.
+        /// </summary>
+        /// <returns>
+        ///   The public key, or <see langword="null"/> if the key is not an ML-DSA key.
+        /// </returns>
+        /// <exception cref="PlatformNotSupportedException">
+        ///   The object represents an ML-DSA public key, but the platform does not support the algorithm.
+        /// </exception>
+        /// <exception cref="CryptographicException">
+        ///   The key contents are corrupt or could not be read successfully.
+        /// </exception>
+        [UnsupportedOSPlatform("browser")]
+        public MLDsa? GetMLDsaPublicKey()
+        {
+            if (MLDsaAlgorithm.GetMLDsaAlgorithmFromOid(_oid.Value) is null)
+                return null;
+
+            return EncodeSubjectPublicKeyInfo().Encode(MLDsa.ImportSubjectPublicKeyInfo);
+        }
+
+        /// <summary>
+        ///   Gets the <see cref="SlhDsa"/> public key, or <see langword="null" />
+        ///   if the key is not an SLH-DSA key.
+        /// </summary>
+        /// <returns>
+        ///   The public key, or <see langword="null"/> if the key is not an SLH-DSA key.
+        /// </returns>
+        /// <exception cref="PlatformNotSupportedException">
+        ///   The object represents an SLH-DSA public key, but the platform does not support the algorithm.
+        /// </exception>
+        /// <exception cref="CryptographicException">
+        ///   The key contents are corrupt or could not be read successfully.
+        /// </exception>
+        [Experimental(Experimentals.PostQuantumCryptographyDiagId, UrlFormat = Experimentals.SharedUrlFormat)]
+        [UnsupportedOSPlatform("browser")]
+        public SlhDsa? GetSlhDsaPublicKey() =>
+            Helpers.IsSlhDsaOid(_oid.Value)
+                ? EncodeSubjectPublicKeyInfo().Encode(SlhDsa.ImportSubjectPublicKeyInfo)
+                : null;
+
+        /// <summary>
+        ///   Gets the <see cref="CompositeMLDsa"/> public key, or <see langword="null" />
+        ///   if the key is not a Composite ML-DSA key.
+        /// </summary>
+        /// <returns>
+        ///   The public key, or <see langword="null"/> if the key is not a Composite ML-DSA key.
+        /// </returns>
+        /// <exception cref="PlatformNotSupportedException">
+        ///   The object represents a Composite ML-DSA public key, but the platform does not support the algorithm.
+        /// </exception>
+        /// <exception cref="CryptographicException">
+        ///   The key contents are corrupt or could not be read successfully.
+        /// </exception>
+        [Experimental(Experimentals.PostQuantumCryptographyDiagId, UrlFormat = Experimentals.SharedUrlFormat)]
+        [UnsupportedOSPlatform("browser")]
+        public CompositeMLDsa? GetCompositeMLDsaPublicKey()
+        {
+            if (CompositeMLDsaAlgorithm.GetAlgorithmFromOid(_oid.Value) is null)
+                return null;
+
+            return EncodeSubjectPublicKeyInfo().Encode(CompositeMLDsa.ImportSubjectPublicKeyInfo);
+        }
+
         internal AsnWriter EncodeSubjectPublicKeyInfo()
         {
             SubjectPublicKeyInfoAsn spki = new SubjectPublicKeyInfoAsn
@@ -290,36 +447,32 @@ namespace System.Security.Cryptography.X509Certificates
             return writer;
         }
 
-        private static unsafe int DecodeSubjectPublicKeyInfo(
+        private static int DecodeSubjectPublicKeyInfo(
             ReadOnlySpan<byte> source,
             out Oid oid,
             out AsnEncodedData? parameters,
             out AsnEncodedData keyValue)
         {
-            fixed (byte* ptr = &MemoryMarshal.GetReference(source))
-            using (MemoryManager<byte> manager = new PointerMemoryManager<byte>(ptr, source.Length))
+            ValueAsnReader reader = new ValueAsnReader(source, AsnEncodingRules.DER);
+
+            int read;
+            ValueSubjectPublicKeyInfoAsn spki;
+
+            try
             {
-                AsnValueReader reader = new AsnValueReader(source, AsnEncodingRules.DER);
-
-                int read;
-                SubjectPublicKeyInfoAsn spki;
-
-                try
-                {
-                    read = reader.PeekEncodedValue().Length;
-                    SubjectPublicKeyInfoAsn.Decode(ref reader, manager.Memory, out spki);
-                }
-                catch (AsnContentException e)
-                {
-                    throw new CryptographicException(SR.Cryptography_Der_Invalid_Encoding, e);
-                }
-
-                DecodeSubjectPublicKeyInfo(ref spki, out oid, out parameters, out keyValue);
-                return read;
+                read = reader.PeekEncodedValue().Length;
+                ValueSubjectPublicKeyInfoAsn.Decode(ref reader, out spki);
             }
+            catch (AsnContentException e)
+            {
+                throw new CryptographicException(SR.Cryptography_Der_Invalid_Encoding, e);
+            }
+
+            DecodeSubjectPublicKeyInfo(ref spki, out oid, out parameters, out keyValue);
+            return read;
         }
 
-        internal static PublicKey DecodeSubjectPublicKeyInfo(ref SubjectPublicKeyInfoAsn spki)
+        internal static PublicKey DecodeSubjectPublicKeyInfo(ref ValueSubjectPublicKeyInfoAsn spki)
         {
             DecodeSubjectPublicKeyInfo(
                 ref spki,
@@ -331,18 +484,16 @@ namespace System.Security.Cryptography.X509Certificates
         }
 
         private static void DecodeSubjectPublicKeyInfo(
-            ref SubjectPublicKeyInfoAsn spki,
+            ref ValueSubjectPublicKeyInfoAsn spki,
             out Oid oid,
             out AsnEncodedData? parameters,
             out AsnEncodedData keyValue)
         {
             oid = new Oid(spki.Algorithm.Algorithm, null);
-            keyValue = new AsnEncodedData(spki.SubjectPublicKey.Span);
-            parameters = spki.Algorithm.Parameters switch
-            {
-                ReadOnlyMemory<byte> algParameters => new AsnEncodedData(algParameters.Span),
-                _ => null,
-            };
+            keyValue = new AsnEncodedData(spki.SubjectPublicKey);
+            parameters = spki.Algorithm.HasParameters ?
+                new AsnEncodedData(spki.Algorithm.Parameters) :
+                null;
         }
     }
 }

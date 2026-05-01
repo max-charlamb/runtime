@@ -36,6 +36,7 @@ namespace System.Diagnostics
         public System.Diagnostics.Activity? Parent { get { throw null; } }
         public string? ParentId { get { throw null; } }
         public System.Diagnostics.ActivitySpanId ParentSpanId { get { throw null; } }
+        public bool HasRandomizedTraceId { get { throw null; } }
         public bool Recorded { get { throw null; } }
         public string? RootId { get { throw null; } }
         public System.Diagnostics.ActivitySpanId SpanId { get { throw null; } }
@@ -184,6 +185,7 @@ namespace System.Diagnostics
     {
         None = 0,
         Recorded = 1,
+        RandomTraceId = 2,
     }
     public readonly partial struct ActivityTraceId : System.IEquatable<System.Diagnostics.ActivityTraceId>
     {
@@ -311,6 +313,8 @@ namespace System.Diagnostics
       public static DistributedContextPropagator CreateDefaultPropagator() { throw null; }
       public static DistributedContextPropagator CreatePassThroughPropagator() { throw null; }
       public static DistributedContextPropagator CreateNoOutputPropagator() { throw null; }
+      public static DistributedContextPropagator CreatePreW3CPropagator() { throw null; }
+      public static DistributedContextPropagator CreateW3CPropagator() { throw null; }
     }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct TagList : System.Collections.Generic.IList<System.Collections.Generic.KeyValuePair<string, object?>>, System.Collections.Generic.IReadOnlyList<System.Collections.Generic.KeyValuePair<string, object?>>

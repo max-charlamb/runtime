@@ -389,8 +389,8 @@ add_signal_handler (int signo, MonoSignalHandler handler, int flags)
 	}
 }
 
-static void
-remove_signal_handler (int signo)
+void
+mono_runtime_posix_restore_handler (int signo)
 {
 	struct sigaction sa;
 	struct sigaction *saved_action = get_saved_signal_handler (signo);
@@ -400,11 +400,10 @@ remove_signal_handler (int signo)
 		sigemptyset (&sa.sa_mask);
 		sa.sa_flags = 0;
 
-		sigaction (signo, &sa, NULL);
+		g_assert (sigaction (signo, &sa, NULL) != -1);
 	} else {
 		g_assert (sigaction (signo, saved_action, NULL) != -1);
 	}
-	remove_saved_signal_handler(signo);
 }
 
 void
@@ -423,8 +422,6 @@ mono_runtime_posix_install_handlers (void)
 	sigaddset (&signal_set, SIGFPE);
 	add_signal_handler (SIGQUIT, sigquit_signal_handler, SA_RESTART);
 	sigaddset (&signal_set, SIGQUIT);
-	add_signal_handler (SIGTERM, mono_sigterm_signal_handler, SA_RESTART);
-	sigaddset (&signal_set, SIGTERM);
 	add_signal_handler (SIGILL, mono_crashing_signal_handler, 0);
 	sigaddset (&signal_set, SIGILL);
 	add_signal_handler (SIGBUS, mono_sigsegv_signal_handler, 0);

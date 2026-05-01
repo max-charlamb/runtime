@@ -40,7 +40,6 @@ BOOL UnsafeVerifyLookupAssembly(AssemblySpecBindingCache *pCache, AssemblySpec *
 
     EX_TRY
     {
-        SCAN_IGNORE_FAULT; // Won't go away: This wrapper exists precisely to turn an OOM here into something our postconditions can deal with.
         result = (pComparator == pCache->LookupAssembly(pSpec));
     }
     EX_CATCH
@@ -49,7 +48,7 @@ BOOL UnsafeVerifyLookupAssembly(AssemblySpecBindingCache *pCache, AssemblySpec *
 
         result = ex->IsTransient();
     }
-    EX_END_CATCH(SwallowAllExceptions)
+    EX_END_CATCH
 
     return result;
 
@@ -71,7 +70,6 @@ BOOL UnsafeVerifyLookupFile(AssemblySpecBindingCache *pCache, AssemblySpec *pSpe
 
     EX_TRY
     {
-        SCAN_IGNORE_FAULT; // Won't go away: This wrapper exists precisely to turn an OOM here into something our postconditions can deal with.
         result = pCache->LookupFile(pSpec)->Equals(pComparator);
     }
     EX_CATCH
@@ -80,7 +78,7 @@ BOOL UnsafeVerifyLookupFile(AssemblySpecBindingCache *pCache, AssemblySpec *pSpe
 
         result = ex->IsTransient();
     }
-    EX_END_CATCH(SwallowAllExceptions)
+    EX_END_CATCH
 
     return result;
 
@@ -104,7 +102,6 @@ BOOL UnsafeContains(AssemblySpecBindingCache *pCache, AssemblySpec *pSpec)
 
     EX_TRY
     {
-        SCAN_IGNORE_FAULT; // Won't go away: This wrapper exists precisely to turn an OOM here into something our postconditions can deal with.
         result = pCache->Contains(pSpec);
     }
     EX_CATCH
@@ -113,38 +110,12 @@ BOOL UnsafeContains(AssemblySpecBindingCache *pCache, AssemblySpec *pSpec)
 
         result = ex->IsTransient();
     }
-    EX_END_CATCH(SwallowAllExceptions)
+    EX_END_CATCH
 
     return result;
 
 }
 #endif
-
-
-
-AssemblySpecHash::~AssemblySpecHash()
-{
-    CONTRACTL
-    {
-        DESTRUCTOR_CHECK;
-        NOTHROW;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-
-    PtrHashMap::PtrIterator i = m_map.begin();
-    while (!i.end())
-    {
-        AssemblySpec *s = (AssemblySpec*) i.GetValue();
-        if (m_pHeap != NULL)
-            s->~AssemblySpec();
-        else
-            delete s;
-
-        ++i;
-    }
-}
 
 HRESULT AssemblySpec::InitializeSpecInternal(mdToken kAssemblyToken,
                                   IMDInternalImport *pImport,
@@ -249,11 +220,8 @@ void AssemblySpec::AssemblyNameInit(ASSEMBLYNAMEREF* pAsmName)
 
     OVERRIDE_TYPE_LOAD_LEVEL_LIMIT(CLASS_LOADED);
 
-    PREPARE_NONVIRTUAL_CALLSITE(METHOD__ASSEMBLY_NAME__CTOR);
-    DECLARE_ARGHOLDER_ARRAY(args, 2);
-    args[ARGNUM_0] = OBJECTREF_TO_ARGHOLDER(*pAsmName);
-    args[ARGNUM_1] = PTR_TO_ARGHOLDER(&nameParts);
-    CALL_MANAGED_METHOD_NORET(args);
+    UnmanagedCallersOnlyCaller createAssemblyName(METHOD__ASSEMBLY_NAME__CREATE_ASSEMBLY_SPEC);
+    createAssemblyName.InvokeThrowing(pAsmName, &nameParts);
 }
 
 /* static */
@@ -311,7 +279,7 @@ AssemblyBinder* AssemblySpec::GetBinderFromParentAssembly(AppDomain *pDomain)
 
     if(pParentAssembly != NULL)
     {
-        // Get the PEAssembly associated with the parent's domain assembly
+        // Get the PEAssembly associated with the parent's assembly
         PEAssembly *pParentPEAssembly = pParentAssembly->GetPEAssembly();
         pParentAssemblyBinder = pParentPEAssembly->GetAssemblyBinder();
     }
@@ -329,11 +297,10 @@ AssemblyBinder* AssemblySpec::GetBinderFromParentAssembly(AppDomain *pDomain)
         // If the parent assembly binder is not available, then we maybe dealing with one of the following
         // assembly scenarios:
         //
-        // 1) Domain Neutral assembly
-        // 2) Entrypoint assembly
-        // 3) AssemblyLoadContext.LoadFromAssemblyName
+        // 1) Entrypoint assembly
+        // 2) AssemblyLoadContext.LoadFromAssemblyName
         //
-        // For (1) and (2), we will need to bind against the DefaultContext binder (aka TPA Binder). This happens
+        // For (2), we will need to bind against the DefaultContext binder (aka TPA Binder). This happens
         // below if we do not find the parent assembly binder.
         //
         // For (3), fetch the fallback load context binder reference.
@@ -343,8 +310,7 @@ AssemblyBinder* AssemblySpec::GetBinderFromParentAssembly(AppDomain *pDomain)
 
     if (!pParentAssemblyBinder)
     {
-        // We can be here when loading assemblies via the host (e.g. ICLRRuntimeHost2::ExecuteAssembly) or dealing with assemblies
-        // whose parent is a domain neutral assembly (see comment above for details).
+        // We can be here when loading assemblies via the host (e.g. ICLRRuntimeHost2::ExecuteAssembly) (see comment above for details).
         //
         // In such a case, the parent assembly (semantically) is CoreLibrary and thus, the default binding context should be
         // used as the parent assembly binder.
@@ -437,7 +403,7 @@ Assembly *AssemblySpec::LoadAssembly(LPCWSTR pFilePath)
 
     // Need to verify that this is a valid CLR assembly.
     if (!pILImage->CheckILFormat())
-        THROW_BAD_FORMAT(BFA_BAD_IL, pILImage.GetValue());
+        THROW_BAD_FORMAT(BFA_BAD_IL, static_cast<PEImage*>(pILImage));
 
     RETURN AssemblyNative::LoadFromPEImage(AppDomain::GetCurrentDomain()->GetDefaultBinder(), pILImage, true /* excludeAppPaths */);
 }
@@ -1080,14 +1046,6 @@ BOOL AssemblySpecBindingCache::RemoveAssembly(Assembly* pAssembly)
     }
 
     RETURN result;
-}
-
-/* static */
-BOOL AssemblySpecHash::CompareSpecs(UPTR u1, UPTR u2)
-{
-    // the same...
-    WRAPPER_NO_CONTRACT;
-    return AssemblySpecBindingCache::CompareSpecs(u1,u2);
 }
 
 /* static */

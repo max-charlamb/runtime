@@ -11,6 +11,7 @@ namespace System.Reflection.Metadata
     public static partial class MetadataUpdater
     {
         [LibraryImport(RuntimeHelpers.QCall, EntryPoint = "AssemblyNative_ApplyUpdate")]
+        [RequiresUnsafe]
         private static unsafe partial void ApplyUpdate(QCallAssembly assembly, byte* metadataDelta, int metadataDeltaLength, byte* ilDelta, int ilDeltaLength, byte* pdbDelta, int pdbDeltaLength);
 
         [LibraryImport(RuntimeHelpers.QCall, EntryPoint = "AssemblyNative_IsApplyUpdateSupported")]
@@ -55,7 +56,7 @@ namespace System.Reflection.Metadata
         /// <summary>
         /// Returns the metadata update capabilities.
         /// </summary>
-        internal static string GetCapabilities() => "Baseline AddMethodToExistingType AddStaticFieldToExistingType AddInstanceFieldToExistingType NewTypeDefinition ChangeCustomAttributes UpdateParameters GenericUpdateMethod GenericAddMethodToExistingType GenericAddFieldToExistingType";
+        internal static string GetCapabilities() => "Baseline AddMethodToExistingType AddStaticFieldToExistingType AddInstanceFieldToExistingType NewTypeDefinition ChangeCustomAttributes UpdateParameters GenericUpdateMethod GenericAddMethodToExistingType GenericAddFieldToExistingType AddFieldRva";
 
         /// <summary>
         /// Returns true if the apply assembly update is enabled and available.

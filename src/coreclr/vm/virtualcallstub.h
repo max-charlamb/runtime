@@ -11,15 +11,7 @@
 #ifndef _VIRTUAL_CALL_STUB_H
 #define _VIRTUAL_CALL_STUB_H
 
-#ifdef FEATURE_VIRTUAL_STUB_DISPATCH
-#define CHAIN_LOOKUP
-#endif // FEATURE_VIRTUAL_STUB_DISPATCH
-
-#if defined(TARGET_X86)
-// If this is uncommented, leaves a file "StubLog_<pid>.log" with statistics on the behavior
-// of stub-based interface dispatch.
-//#define STUB_LOGGING
-#endif
+#include "switches.h"
 
 bool UseCachedInterfaceDispatch();
 
@@ -52,6 +44,7 @@ extern "C" PCODE STDCALL VSD_ResolveWorker(TransitionBlock * pTransitionBlock,
 #endif
                                            );
 
+extern "C" PCODE STDCALL VSD_ResolveWorkerForInterfaceLookupSlot(TransitionBlock * pTransitionBlock, TADDR siteAddrForRegisterIndirect);
 
 /////////////////////////////////////////////////////////////////////////////////////
 #if defined(TARGET_X86) || defined(TARGET_AMD64)
@@ -159,9 +152,10 @@ extern "C" void ResolveWorkerChainLookupAsmStub();    // for chaining of entries
 
 #ifdef TARGET_X86
 extern "C" void BackPatchWorkerAsmStub();             // backpatch a call site to point to a different stub
-#ifdef TARGET_UNIX
 extern "C" void BackPatchWorkerStaticStub(PCODE returnAddr, TADDR siteAddrForRegisterIndirect);
-#endif // TARGET_UNIX
+#ifdef CHAIN_LOOKUP
+extern "C" ResolveCacheElem* __fastcall VSD_PromoteChainEntry(ResolveCacheElem *pElem);
+#endif
 #endif // TARGET_X86
 
 #endif // FEATURE_VIRTUAL_STUB_DISPATCH
@@ -328,7 +322,7 @@ public:
     static BOOL isStubStatic(PCODE addr)
     {
         WRAPPER_NO_CONTRACT;
-        
+
 #ifdef FEATURE_CACHED_INTERFACE_DISPATCH
         if (isCachedInterfaceDispatchStub(addr))
             return TRUE;
@@ -501,8 +495,11 @@ private:
 #endif
                                    );
 
-#if defined(TARGET_X86) && defined(TARGET_UNIX)
+#if defined(TARGET_X86)
     friend void BackPatchWorkerStaticStub(PCODE returnAddr, TADDR siteAddrForRegisterIndirect);
+#ifdef CHAIN_LOOKUP
+    friend ResolveCacheElem* __fastcall VSD_PromoteChainEntry(ResolveCacheElem *pElem);
+#endif
 #endif
 
     //These are the entrypoints that the stubs actually end up calling via the
@@ -747,6 +744,17 @@ protected:
         return W("Unexpected. RangeSectionStubManager should report the name");
     }
 #endif
+
+    friend struct ::cdac_data<VirtualCallStubManager>;
+};
+
+template<>
+struct cdac_data<VirtualCallStubManager>
+{
+    static constexpr size_t IndcellHeap = offsetof(VirtualCallStubManager, indcell_heap);
+#ifdef FEATURE_VIRTUAL_STUB_DISPATCH
+    static constexpr size_t CacheEntryHeap = offsetof(VirtualCallStubManager, cache_entry_heap);
+#endif // FEATURE_VIRTUAL_STUB_DISPATCH
 };
 
 /********************************************************************************************************
@@ -1553,6 +1561,11 @@ private:
     void* operator new(size_t baseSize, NumCallStubs_t, size_t numCallStubs)
     {
         return ::operator new(baseSize + (numCallStubs + CALL_STUB_FIRST_INDEX) * sizeof(size_t));
+    }
+public:
+    static void operator delete(void* ptr)
+    {
+        ::operator delete(ptr);
     }
 };
 #ifdef _MSC_VER

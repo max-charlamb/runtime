@@ -38,6 +38,7 @@ namespace System.Xml.XslCompiledTransformApiTests
     //
     ////////////////////////////////////////////////////////////////
     [ConditionalClass(typeof(PlatformDetection), nameof(PlatformDetection.IsReflectionEmitSupported))]
+    [ActiveIssue("https://github.com/dotnet/runtime/issues/124344", typeof(PlatformDetection), nameof(PlatformDetection.IsAppleMobile), nameof(PlatformDetection.IsCoreCLR))]
     public class XsltApiTestCaseBase2
     {
         // Generic data for all derived test cases
@@ -468,7 +469,7 @@ namespace System.Xml.XslCompiledTransformApiTests
             baseline = FullFilePath(baseline);
 
             XmlDiff.XmlDiff diff = new XmlDiff.XmlDiff();
-            diff.Option = XmlDiffOption.IgnoreEmptyElement | XmlDiffOption.IgnoreAttributeOrder | XmlDiffOption.InfosetComparison | XmlDiffOption.IgnoreWhitespace | XmlDiffOption.NormalizeNewline;
+            diff.Option = XmlDiffOption.IgnoreEmptyElement | XmlDiffOption.IgnoreAttributeOrder | XmlDiffOption.InfosetComparison | XmlDiffOption.IgnoreWhitespace | XmlDiffOption.NormalizeNewline | XmlDiffOption.NormalizeSpaces;
             XmlParserContext context = new XmlParserContext(new NameTable(), null, "", XmlSpace.None);
 
             fsExpected = new FileStream(baseline, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -505,7 +506,7 @@ namespace System.Xml.XslCompiledTransformApiTests
                     _output.WriteLine(output);
                 }
 
-                using (StreamWriter sw = new StreamWriter(new FileStream("diff.xml", FileMode.Open, FileAccess.Read)))
+                using (StreamWriter sw = new StreamWriter(new FileStream("diff.xml", FileMode.Create, FileAccess.Write)))
                 {
                     sw.WriteLine("<?xml-stylesheet href='diff.xsl' type='text/xsl'?>");
                     sw.WriteLine(diff.ToXml());

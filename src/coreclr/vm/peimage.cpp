@@ -305,17 +305,17 @@ void PEImage::OpenMDImport()
         IMDInternalImport* m_pNewImport;
         const void* pMeta=NULL;
         COUNT_T cMeta=0;
-        if(HasNTHeaders() && HasCorHeader())
+        if(HasHeaders() && HasCorHeader())
             pMeta=GetMetadata(&cMeta);
 
         if(pMeta==NULL)
             return;
 
-        IfFailThrow(GetMetaDataInternalInterface((void *) pMeta,
-                                                 cMeta,
-                                                 ofRead,
-                                                 IID_IMDInternalImport,
-                                                 (void **) &m_pNewImport));
+        IfFailThrow(GetMDInternalInterface((void *) pMeta,
+                                           cMeta,
+                                           ofRead,
+                                           IID_IMDInternalImport,
+                                           (void **) &m_pNewImport));
 
         if(InterlockedCompareExchangeT(&m_pMDImport, m_pNewImport, NULL))
         {
@@ -370,11 +370,11 @@ void PEImage::GetMVID(GUID *pMvid)
 
     SafeComHolder<IMDInternalImport> pMDImport;
 
-    IfFailThrow(GetMetaDataInternalInterface((void *) pMeta,
-                                             cMeta,
-                                             ofRead,
-                                             IID_IMDInternalImport,
-                                             (void **) &pMDImport));
+    IfFailThrow(GetMDInternalInterface((void *) pMeta,
+                                       cMeta,
+                                       ofRead,
+                                       IID_IMDInternalImport,
+                                       (void **) &pMDImport));
 
     pMDImport->GetScopeProps(NULL, &MvidDEBUG);
 
@@ -470,7 +470,7 @@ void PEImage::EnumMemoryRegions(CLRDataEnumMemoryFlags flags)
 
     EX_TRY
     {
-        if (HasLoadedLayout() && HasNTHeaders() && HasDirectoryEntry(IMAGE_DIRECTORY_ENTRY_DEBUG))
+        if (HasLoadedLayout() && HasHeaders() && HasDirectoryEntry(IMAGE_DIRECTORY_ENTRY_DEBUG))
         {
             // Get a pointer to the contents and size of the debug directory and report it
             COUNT_T cbDebugDir;
@@ -636,11 +636,13 @@ PTR_PEImageLayout PEImage::GetOrCreateLayoutInternal(DWORD imageLayoutMask)
 
         _ASSERTE(bIsLoadedLayoutSuitable || bIsFlatLayoutSuitable);
 
+#ifndef PEIMAGE_FLAT_LAYOUT_ONLY
         if (bIsLoadedLayoutPreferred)
         {
             _ASSERTE(bIsLoadedLayoutSuitable);
             pRetVal = PEImage::CreateLoadedLayout(!bIsFlatLayoutSuitable);
         }
+#endif
 
         if (pRetVal == NULL)
         {
@@ -721,7 +723,7 @@ PTR_PEImage PEImage::CreateFromByteArray(const BYTE* array, COUNT_T size)
 
     SimpleWriteLockHolder lock(pImage->m_pLayoutLock);
     pImage->SetLayout(IMAGE_FLAT,pLayout);
-    RETURN dac_cast<PTR_PEImage>(pImage.Extract());
+    RETURN dac_cast<PTR_PEImage>(pImage.Detach());
 }
 
 #ifndef TARGET_UNIX
@@ -754,11 +756,9 @@ PTR_PEImage PEImage::CreateFromHMODULE(HMODULE hMod)
     }
 
     _ASSERTE(pImage->m_pLayouts[IMAGE_FLAT] != NULL);
-    RETURN dac_cast<PTR_PEImage>(pImage.Extract());
+    RETURN dac_cast<PTR_PEImage>(pImage.Detach());
 }
 #endif // !TARGET_UNIX
-
-#endif //DACCESS_COMPILE
 
 HANDLE PEImage::GetFileHandle()
 {
@@ -776,11 +776,7 @@ HANDLE PEImage::GetFileHandle()
 
     if (m_hFile == INVALID_HANDLE_VALUE)
     {
-#if !defined(DACCESS_COMPILE)
         EEFileLoadException::Throw(GetPathToLoad(), hr);
-#else // defined(DACCESS_COMPILE)
-        ThrowHR(hr);
-#endif // !defined(DACCESS_COMPILE)
     }
 
     return m_hFile;
@@ -819,6 +815,7 @@ HRESULT PEImage::TryOpenFile(bool takeLock)
     return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 }
 
+#endif // !DACCESS_COMPILE
 
 BOOL PEImage::IsPtrInImage(PTR_CVOID data)
 {

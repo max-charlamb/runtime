@@ -154,21 +154,46 @@ namespace Microsoft.Extensions.DependencyInjection
             object? service = GetKeyedService(serviceType, serviceKey, serviceProviderEngineScope);
             if (service == null)
             {
-                throw new InvalidOperationException(SR.Format(SR.NoServiceRegistered, serviceType));
+                if (serviceKey is null)
+                {
+                    ThrowHelper.ThrowInvalidOperationException_NoServiceRegistered(serviceType);
+                }
+                else
+                {
+                    ThrowHelper.ThrowInvalidOperationException_NoKeyedServiceRegistered(serviceType, serviceKey.GetType());
+                }
             }
+
             return service;
         }
 
         internal bool IsDisposed() => _disposed;
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Disposes the service provider and all resolved services that implement <see cref="IDisposable"/>.
+        /// </summary>
+        /// <remarks>
+        /// Prefer calling <see cref="DisposeAsync"/> over this method. If any resolved service implements
+        /// <see cref="IAsyncDisposable"/> but not <see cref="IDisposable"/>, this method throws an
+        /// <see cref="InvalidOperationException"/>. Use <see cref="DisposeAsync"/> to properly handle all
+        /// disposable services, or explicitly perform sync-over-async on the caller side if synchronous
+        /// disposal is required.
+        /// </remarks>
         public void Dispose()
         {
             DisposeCore();
             Root.Dispose();
         }
 
-        /// <inheritdoc/>
+        /// <summary>
+        /// Asynchronously disposes the service provider and all resolved services that implement <see cref="IDisposable"/> or <see cref="IAsyncDisposable"/>.
+        /// </summary>
+        /// <remarks>
+        /// Awaiting individual <see cref="IAsyncDisposable.DisposeAsync"/> calls uses <c>ConfigureAwait(false)</c>,
+        /// so when an asynchronous dispose operation yields, its continuations do not attempt to resume on the original
+        /// synchronization context. Services should not rely on disposal continuations running on any particular context.
+        /// </remarks>
+        /// <returns>A value task that represents the asynchronous operation.</returns>
         public ValueTask DisposeAsync()
         {
             DisposeCore();

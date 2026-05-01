@@ -19,6 +19,7 @@
 #include "sstring.h"
 #include "holder.h"
 #include <assemblyprobeextension.h>
+#include "cdacdata.h"
 
 class SimpleRWLock;
 // --------------------------------------------------------------------------------
@@ -144,17 +145,19 @@ public:
     INT64 GetSize() const;
     BOOL IsCompressed(INT64* uncompressedSize = NULL) const;
 
+#ifndef DACCESS_COMPILE
     HANDLE GetFileHandle();
     HRESULT TryOpenFile(bool takeLock = false);
+#endif
 
     void GetMVID(GUID *pMvid);
-    BOOL HasV1Metadata();
     IMDInternalImport* GetMDImport();
     BOOL MDImportLoaded();
 
     BOOL HasContents() ;
     BOOL IsPtrInImage(PTR_CVOID data);
 
+    BOOL HasHeaders();
     BOOL HasNTHeaders();
     BOOL HasCorHeader();
     BOOL HasReadyToRunHeader();
@@ -316,15 +319,31 @@ private:
     SimpleRWLock *m_pLayoutLock;
     PTR_PEImageLayout m_pLayouts[IMAGE_COUNT];
     IMDInternalImport* m_pMDImport;
+
+    friend struct cdac_data<PEImage>;
 };
 
-FORCEINLINE void PEImageRelease(PEImage *i)
+template<>
+struct cdac_data<PEImage>
 {
-    WRAPPER_NO_CONTRACT;
-    i->Release();
-}
+    // The loaded PEImageLayout is m_pLayouts[IMAGE_LOADED]
+    static constexpr size_t LoadedImageLayout = offsetof(PEImage, m_pLayouts) + sizeof(PTR_PEImageLayout);
+    static constexpr size_t ProbeExtensionResult = offsetof(PEImage, m_probeExtensionResult);
+};
 
-typedef Wrapper<PEImage *, DoNothing, PEImageRelease> PEImageHolder;
+struct PEImageHolderTraits final
+{
+    using Type = PEImage*;
+    static constexpr Type Default() { return NULL; }
+    static void Free(Type i)
+    {
+        WRAPPER_NO_CONTRACT;
+        if (i != NULL)
+            i->Release();
+    }
+};
+
+using PEImageHolder = LifetimeHolder<PEImageHolderTraits>;
 
 // ================================================================================
 // Inline definitions
