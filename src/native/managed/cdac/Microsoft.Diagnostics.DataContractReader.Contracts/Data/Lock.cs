@@ -3,7 +3,7 @@
 
 using Microsoft.Diagnostics.DataContractReader.Contracts;
 
-namespace Microsoft.Diagnostics.DataContractReader.Data.Managed;
+namespace Microsoft.Diagnostics.DataContractReader.Data;
 
 internal sealed class Lock : IData<Lock>
 {
