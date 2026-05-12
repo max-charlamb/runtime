@@ -84,6 +84,7 @@ public enum DataType
     ManagedObjectWrapperLayout,
     ComWrappersVtablePtrs,
     String,
+    Lock,
     MethodDesc,
     MethodDescChunk,
     MethodDescCodeData,

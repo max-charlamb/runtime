@@ -179,6 +179,13 @@ CDAC_TYPE_FIELD(String, T_POINTER, m_FirstChar, cdac_data<StringObject>::m_First
 CDAC_TYPE_FIELD(String, T_UINT32, m_StringLength, cdac_data<StringObject>::m_StringLength)
 CDAC_TYPE_END(String)
 
+CDAC_TYPE_BEGIN(Lock)
+CDAC_TYPE_INDETERMINATE(Lock)
+CDAC_TYPE_FIELD(Lock, T_INT32, OwningThreadId, cdac_data<LockObject>::_owningThreadId)
+CDAC_TYPE_FIELD(Lock, T_UINT32, State, cdac_data<LockObject>::_state)
+CDAC_TYPE_FIELD(Lock, T_UINT32, RecursionCount, cdac_data<LockObject>::_recursionCount)
+CDAC_TYPE_END(Lock)
+
 CDAC_TYPE_BEGIN(ContinuationObject)
 CDAC_TYPE_SIZE(sizeof(ContinuationObject))
 CDAC_TYPE_END(ContinuationObject)
