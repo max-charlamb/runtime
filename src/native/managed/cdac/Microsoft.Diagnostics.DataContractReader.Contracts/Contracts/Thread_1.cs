@@ -48,14 +48,14 @@ internal readonly struct Thread_1 : IThread
 
     void IThread.SetDebuggerControlledThreadState(TargetPointer thread, DebuggerControlledThreadState state)
     {
-        uint current = _target.ReadField<uint>(thread, _threadTypeInfo, nameof(Data.Thread.DebuggerControlledThreadState));
-        _target.WriteField(thread, _threadTypeInfo, nameof(Data.Thread.DebuggerControlledThreadState), current | (uint)state);
+        Data.Thread t = _target.ProcessedData.GetOrAdd<Data.Thread>(thread);
+        t.WriteDebuggerControlledThreadState(_target, t.DebuggerControlledThreadState | (uint)state);
     }
 
     void IThread.ResetDebuggerControlledThreadState(TargetPointer thread, DebuggerControlledThreadState state)
     {
-        uint current = _target.ReadField<uint>(thread, _threadTypeInfo, nameof(Data.Thread.DebuggerControlledThreadState));
-        _target.WriteField(thread, _threadTypeInfo, nameof(Data.Thread.DebuggerControlledThreadState), current & ~(uint)state);
+        Data.Thread t = _target.ProcessedData.GetOrAdd<Data.Thread>(thread);
+        t.WriteDebuggerControlledThreadState(_target, t.DebuggerControlledThreadState & ~(uint)state);
     }
 
     ThreadStoreData IThread.GetThreadStoreData()
@@ -132,14 +132,18 @@ internal readonly struct Thread_1 : IThread
             lastThrownObjectHandle = thread.LastThrownObject.Handle;
         }
 
+        Data.RuntimeThreadLocals? rtl = thread.RuntimeThreadLocals != TargetPointer.Null
+            ? _target.ProcessedData.GetOrAdd<Data.RuntimeThreadLocals>(thread.RuntimeThreadLocals)
+            : null;
+
         return new ThreadData(
             threadPointer,
             thread.Id,
             thread.OSId,
             GetThreadState((ThreadState_1)thread.State),
             (thread.PreemptiveGCDisabled & 0x1) != 0,
-            thread.RuntimeThreadLocals?.AllocContext.GCAllocationContext.Pointer ?? TargetPointer.Null,
-            thread.RuntimeThreadLocals?.AllocContext.GCAllocationContext.Limit ?? TargetPointer.Null,
+            rtl?.AllocContext.GCAllocationContext.Pointer ?? TargetPointer.Null,
+            rtl?.AllocContext.GCAllocationContext.Limit ?? TargetPointer.Null,
             thread.Frame,
             firstNestedException,
             thread.ExposedObject.Handle,
@@ -153,9 +157,12 @@ internal readonly struct Thread_1 : IThread
     void IThread.GetThreadAllocContext(TargetPointer threadPointer, out long allocBytes, out long allocBytesLoh)
     {
         Data.Thread thread = _target.ProcessedData.GetOrAdd<Data.Thread>(threadPointer);
+        Data.RuntimeThreadLocals? rtl = thread.RuntimeThreadLocals != TargetPointer.Null
+            ? _target.ProcessedData.GetOrAdd<Data.RuntimeThreadLocals>(thread.RuntimeThreadLocals)
+            : null;
 
-        allocBytes = thread.RuntimeThreadLocals?.AllocContext.GCAllocationContext.AllocBytes ?? 0;
-        allocBytesLoh = thread.RuntimeThreadLocals?.AllocContext.GCAllocationContext.AllocBytesLoh ?? 0;
+        allocBytes = rtl?.AllocContext.GCAllocationContext.AllocBytes ?? 0;
+        allocBytesLoh = rtl?.AllocContext.GCAllocationContext.AllocBytesLoh ?? 0;
     }
 
     void IThread.GetStackLimitData(TargetPointer threadPointer, out TargetPointer stackBase, out TargetPointer stackLimit, out TargetPointer frameAddress)
@@ -282,10 +289,10 @@ internal readonly struct Thread_1 : IThread
             }
             else
             {
-                readFrom = thread.UEWatsonBucketTrackerBuckets;
+                readFrom = thread.UEWatsonBucketTrackerBuckets ?? TargetPointer.Null;
                 if (readFrom == TargetPointer.Null)
                 {
-                    readFrom = exceptionInfo.ExceptionWatsonBucketTrackerBuckets;
+                    readFrom = exceptionInfo.ExceptionWatsonBucketTrackerBuckets ?? TargetPointer.Null;
                 }
                 else
                 {
@@ -295,7 +302,7 @@ internal readonly struct Thread_1 : IThread
         }
         else
         {
-            readFrom = thread.UEWatsonBucketTrackerBuckets;
+            readFrom = thread.UEWatsonBucketTrackerBuckets ?? TargetPointer.Null;
         }
 
         if (readFrom == TargetPointer.Null)
