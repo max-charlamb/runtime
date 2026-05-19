@@ -3,15 +3,15 @@
 
 namespace Microsoft.Diagnostics.DataContractReader.Data.Managed;
 
-[CdacType(ManagedFullName = "System.Threading.Lock")]
+[CdacType(nameof(DataType.Lock), ManagedFullName = "System.Threading.Lock")]
 internal sealed partial class Lock : IData<Lock>
 {
-    [Field("_state")]
+    [Field("State", "_state")]
     public uint State { get; }
 
-    [Field("_owningThreadId")]
+    [Field("OwningThreadId", "_owningThreadId")]
     public int OwningThreadId { get; }
 
-    [Field("_recursionCount")]
+    [Field("RecursionCount", "_recursionCount")]
     public uint RecursionCount { get; }
 }

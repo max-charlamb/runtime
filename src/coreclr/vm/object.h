@@ -877,6 +877,28 @@ struct cdac_data<StringObject>
     static constexpr size_t m_StringLength = offsetof(StringObject, m_StringLength);
 };
 
+// Native mirror of the managed System.Threading.Lock class layout. This is used
+// only by the cDAC data descriptor to expose the offsets of Lock's relevant
+// instance fields. The field order/types must be kept in sync with the managed
+// declaration in System.Private.CoreLib (System/Threading/Lock.cs).
+class LockObject : public Object
+{
+private:
+    INT32   _owningThreadId;
+    UINT32  _state;
+    UINT32  _recursionCount;
+
+    friend struct ::cdac_data<LockObject>;
+};
+
+template<>
+struct cdac_data<LockObject>
+{
+    static constexpr size_t _owningThreadId = offsetof(LockObject, _owningThreadId);
+    static constexpr size_t _state          = offsetof(LockObject, _state);
+    static constexpr size_t _recursionCount = offsetof(LockObject, _recursionCount);
+};
+
 /*================================GetEmptyString================================
 **Get a reference to the empty string.  If we haven't already gotten one, we
 **query the String class for a pointer to the empty string that we know was
