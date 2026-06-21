@@ -338,6 +338,17 @@ internal partial class StackWalk_1 : IStackWalk
                     else
                     {
                         _gcScanner.GcScanRoots(gcFrame.Frame.FrameAddress, scanContext);
+
+                        // x86-only: the cDAC cannot reliably continue walking past a transition
+                        // Frame because the EBP-chain unwind needs the callee's cbStackPop
+                        // (which depends on a not-yet-ported ArgIterator). Record the entire
+                        // upstream walk as deferred so the stress harness treats any further
+                        // runtime-only frames as known-not-implemented rather than mismatches.
+                        if (_target.Contracts.RuntimeInfo.GetTargetArchitecture() == RuntimeInfoArchitecture.X86
+                            && IsTransitionFrame(gcFrame.Frame.FrameAddress))
+                        {
+                            scanContext.RecordDeferredWalk(pFrame);
+                        }
                     }
                 }
             }
@@ -1259,4 +1270,32 @@ internal partial class StackWalk_1 : IStackWalk
     }
 
     #endregion Interpreter
+
+    /// <summary>
+    /// Returns true if the Frame at <paramref name="frameAddress"/> is a "transition Frame":
+    /// a runtime helper Frame pushed when control crosses a managed -> native -> managed
+    /// transition where the JIT cannot inline the unwind. On x86 these Frames need a
+    /// callee-popped argument byte count (cbStackPop) to recover the caller's SP, and the
+    /// cDAC cannot compute that for every kind yet.
+    /// </summary>
+    private bool IsTransitionFrame(TargetPointer frameAddress)
+    {
+        if (frameAddress == TargetPointer.Null)
+            return false;
+        Data.Frame frameData = _target.ProcessedData.GetOrAdd<Data.Frame>(frameAddress);
+        FrameType frameType = _frameHelpers.GetFrameType(frameData.Identifier);
+        switch (frameType)
+        {
+            case FrameType.FramedMethodFrame:
+            case FrameType.PInvokeCalliFrame:
+            case FrameType.PrestubMethodFrame:
+            case FrameType.StubDispatchFrame:
+            case FrameType.CallCountingHelperFrame:
+            case FrameType.ExternalMethodFrame:
+            case FrameType.DynamicHelperFrame:
+                return true;
+            default:
+                return false;
+        }
+    }
 }

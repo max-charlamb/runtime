@@ -44,6 +44,15 @@
 // mark a frame whose ref scan was intentionally skipped (e.g. PromoteCallerStack
 // pending the ArgIterator port). Mirrors GcScanFlags.CDAC_DEFERRED_FRAME.
 static const unsigned int CDAC_DEFERRED_FRAME = 0x40000000;
+
+// Sentinel flag set on cDAC StackRefData entries by RecordDeferredWalk to
+// mark a Frame past which the cDAC's stack walk cannot reliably continue
+// (e.g. an x86 transition Frame where the cDAC can't compute cbStackPop and
+// thus the EBP-chain unwind state is unknown above this point). When this
+// sentinel is present, the harness treats every runtime-only frame in the
+// rest of the walk as KNOWN_NIE rather than MISMATCH. Mirrors
+// GcScanFlags.CDAC_DEFERRED_WALK.
+static const unsigned int CDAC_DEFERRED_WALK  = 0x20000000;
 static const int MAX_DEFERRED_FRAMES = 64;
 
 // Bit flags for DOTNET_CdacStress configuration.
@@ -1076,6 +1085,7 @@ static int CompareFrames(
     StackRef* refsCdac, int countCdac,
     StackRef* refsRt,   int countRt,
     const CLRDATA_ADDRESS* deferred, int deferredCount,
+    bool hasDeferredWalk,
     SArray<FrameResult>* outResults,
     SArray<RefDisposition>* dispBuf)
 {
@@ -1157,9 +1167,15 @@ static int CompareFrames(
         }
         else
         {
-            // Frame only in RT. KNOWN_NIE iff Source is on the deferred list.
+            // Frame only in RT. KNOWN_NIE iff:
+            //   * Source is on the deferred list (the leaf Frame cDAC explicitly marked), OR
+            //   * cDAC signalled CDAC_DEFERRED_WALK -- meaning the cDAC's stack walk
+            //     could not continue past some Frame (typically an x86 transition Frame
+            //     whose cbStackPop cDAC can't compute), so every upstream runtime-only
+            //     frame is unrepresentable in cDAC's view, not a real mismatch.
             FrameRefGroup& gR = groupsRt[idxRt];
-            bool isKnownNie = IsDeferredFrame(gR.Source, deferred, deferredCount);
+            bool isKnownNie = hasDeferredWalk
+                || IsDeferredFrame(gR.Source, deferred, deferredCount);
             fr->Source     = gR.Source;
             fr->SourceType = gR.SourceType;
             fr->SP_cdac    = 0;
@@ -1210,24 +1226,35 @@ static CompareVerdict ComputeVerdict(const FrameResult* frames, int frameCount)
     return v;
 }
 
-// Extract CDAC_DEFERRED_FRAME sentinel entries from a cDAC ref array.
-// Removes them in-place (shifting later elements down), writes their Source
-// addresses into `deferredOut`, and returns the new ref count. Sentinels are
-// emitted by GcScanContext.RecordDeferredFrame for explicit Frames whose cDAC
-// scan path is not implemented yet (typically PromoteCallerStack pending the
-// ArgIterator port).
+// Extract CDAC_DEFERRED_FRAME and CDAC_DEFERRED_WALK sentinel entries from a
+// cDAC ref array. Removes them in-place (shifting later elements down), writes
+// the per-Frame deferred Source addresses into `deferredOut`, and returns the
+// new ref count. Sets `*pHasDeferredWalk` to true if any sentinel had the
+// CDAC_DEFERRED_WALK flag (meaning the cDAC's stack walk could not reliably
+// continue past that Frame).
+//
+// Sentinels are emitted by GcScanContext.RecordDeferredFrame /
+// .RecordDeferredWalk. Frames-only sentinels mark a single Frame whose
+// ref scan is not implemented (so RT-only refs at that Frame's Source are
+// known issues). Walk-deferred sentinels mark a point past which cDAC has
+// no view of the stack at all -- every RT-only frame in the entire walk
+// gets classified as KNOWN_NIE.
 static int ExtractDeferredFrames(
     StackRef* refs, int count,
-    CLRDATA_ADDRESS* deferredOut, int* pDeferredCount, int deferredMax)
+    CLRDATA_ADDRESS* deferredOut, int* pDeferredCount, int deferredMax,
+    bool* pHasDeferredWalk)
 {
     int dst = 0;
     int deferred = 0;
+    bool hasDeferredWalk = false;
     for (int i = 0; i < count; i++)
     {
-        if ((refs[i].Flags & CDAC_DEFERRED_FRAME) != 0)
+        if ((refs[i].Flags & (CDAC_DEFERRED_FRAME | CDAC_DEFERRED_WALK)) != 0)
         {
             if (deferred < deferredMax)
                 deferredOut[deferred++] = refs[i].Source;
+            if ((refs[i].Flags & CDAC_DEFERRED_WALK) != 0)
+                hasDeferredWalk = true;
             continue;
         }
         if (dst != i)
@@ -1235,6 +1262,7 @@ static int ExtractDeferredFrames(
         dst++;
     }
     *pDeferredCount = deferred;
+    *pHasDeferredWalk = hasDeferredWalk;
     return dst;
 }
 
@@ -1322,19 +1350,23 @@ static void VerifyAtStressPoint(Thread* pThread, PCONTEXT regs)
     }
     uintptr_t stackLimit = (uintptr_t)topStack;
 
-    // B.2: Extract CDAC_DEFERRED_FRAME sentinels from the cDAC ref set.
-    // These are markers (not real refs) emitted when the cDAC intentionally
-    // skips a Frame whose scan path is not implemented yet. Their Source
-    // addresses are used in Phase C to re-classify diffs as known issues.
+    // B.2: Extract CDAC_DEFERRED_FRAME / CDAC_DEFERRED_WALK sentinels from
+    // the cDAC ref set. These are markers (not real refs) emitted when the
+    // cDAC intentionally skips a Frame whose scan path is not implemented
+    // yet, or signals that its stack walk could not reliably continue past
+    // a given Frame. Their Source addresses are used in Phase C to
+    // re-classify diffs as known issues.
     CLRDATA_ADDRESS deferredFrames[MAX_DEFERRED_FRAMES];
     int deferredFrameCount = 0;
+    bool hasDeferredWalk = false;
     int cdacCount = (int)cdacRefs.GetCount();
     if (cdacCount > 0)
     {
         StackRef* buf = cdacRefs.OpenRawBuffer();
         cdacCount = ExtractDeferredFrames(
             buf, cdacCount,
-            deferredFrames, &deferredFrameCount, MAX_DEFERRED_FRAMES);
+            deferredFrames, &deferredFrameCount, MAX_DEFERRED_FRAMES,
+            &hasDeferredWalk);
         cdacRefs.CloseRawBuffer();
     }
 
@@ -1357,6 +1389,7 @@ static void VerifyAtStressPoint(Thread* pThread, PCONTEXT regs)
         cdacBuf, cdacCount,
         runtimeBuf, runtimeCount,
         deferredFrames, deferredFrameCount,
+        hasDeferredWalk,
         &frameResults, &dispBuf);
     const RefDisposition* dispPtr = dispBuf.GetElements();
     CompareVerdict verdict = ComputeVerdict(frameResults.GetElements(), frameCount);
