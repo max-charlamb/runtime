@@ -277,88 +277,97 @@ internal partial class StackWalk_1 : IStackWalk
 
         // Filter drives Next() directly, matching native Filter()+NextRaw() integration.
         // This prevents funclet-to-parent transitions from re-visiting already-walked frames.
-        foreach (GCFrameData gcFrame in Filter(walkData))
+        try
         {
-            try
+            foreach (GCFrameData gcFrame in Filter(walkData))
             {
-                bool reportGcReferences = gcFrame.ShouldCrawlFrameReportGCReferences;
-
-                TargetPointer pFrame = ((IStackWalk)this).GetFrameAddress(gcFrame.Frame);
-                scanContext.UpdateScanContext(
-                    gcFrame.Frame.Context.StackPointer,
-                    gcFrame.Frame.Context.InstructionPointer,
-                    pFrame);
-
-                if (reportGcReferences)
+                try
                 {
-                    if (gcFrame.Frame.State == StackWalkState.Frameless)
+                    bool reportGcReferences = gcFrame.ShouldCrawlFrameReportGCReferences;
+
+                    TargetPointer pFrame = ((IStackWalk)this).GetFrameAddress(gcFrame.Frame);
+                    scanContext.UpdateScanContext(
+                        gcFrame.Frame.Context.StackPointer,
+                        gcFrame.Frame.Context.InstructionPointer,
+                        pFrame);
+
+                    if (reportGcReferences)
                     {
-                        if (!IsManaged(gcFrame.Frame.Context.InstructionPointer, out CodeBlockHandle? cbh))
-                            throw new InvalidOperationException("Expected managed code");
-
-                        GcSlotEnumerationOptions gcOptions = new()
+                        if (gcFrame.Frame.State == StackWalkState.Frameless)
                         {
-                            IsActiveFrame = gcFrame.Frame.IsActiveFrame,
+                            if (!IsManaged(gcFrame.Frame.Context.InstructionPointer, out CodeBlockHandle? cbh))
+                                throw new InvalidOperationException("Expected managed code");
 
-                            // If the frame was interrupted by an exception (reached via a
-                            // FaultingExceptionFrame), set ExecutionAborted so the GcInfoDecoder
-                            // skips live slot reporting at non-interruptible offsets. This matches
-                            // native CrawlFrame::GetCodeManagerFlags (stackwalk.h).
-                            IsExecutionAborted = gcFrame.IsInterrupted,
-                            IsParentOfFuncletStackFrame = gcFrame.ShouldParentToFuncletSkipReportingGCReferences,
-                            SuppressUntrackedSlots = _eman.IsFilterFunclet(cbh.Value),
-                        };
-
-                        uint? relOffsetOverride = null;
-                        if (gcFrame.ShouldParentFrameUseUnwindTargetPCforGCReporting)
-                        {
-                            _eman.GetGCInfo(cbh.Value, out TargetPointer gcInfoAddr, out uint gcVersion);
-                            IGCInfoHandle gcHandle = _target.Contracts.GCInfo.DecodePlatformSpecificGCInfo(gcInfoAddr, gcVersion);
-                            uint startPC = gcFrame.ClauseForCatchHandlerStartPC;
-                            uint endPC = gcFrame.ClauseForCatchHandlerEndPC;
-                            foreach (var range in _target.Contracts.GCInfo.GetInterruptibleRanges(gcHandle))
+                            GcSlotEnumerationOptions gcOptions = new()
                             {
-                                if (range.EndOffset <= startPC)
-                                    continue;
-                                if (startPC >= range.StartOffset && startPC < range.EndOffset)
+                                IsActiveFrame = gcFrame.Frame.IsActiveFrame,
+
+                                // If the frame was interrupted by an exception (reached via a
+                                // FaultingExceptionFrame), set ExecutionAborted so the GcInfoDecoder
+                                // skips live slot reporting at non-interruptible offsets. This matches
+                                // native CrawlFrame::GetCodeManagerFlags (stackwalk.h).
+                                IsExecutionAborted = gcFrame.IsInterrupted,
+                                IsParentOfFuncletStackFrame = gcFrame.ShouldParentToFuncletSkipReportingGCReferences,
+                                SuppressUntrackedSlots = _eman.IsFilterFunclet(cbh.Value),
+                            };
+
+                            uint? relOffsetOverride = null;
+                            if (gcFrame.ShouldParentFrameUseUnwindTargetPCforGCReporting)
+                            {
+                                _eman.GetGCInfo(cbh.Value, out TargetPointer gcInfoAddr, out uint gcVersion);
+                                IGCInfoHandle gcHandle = _target.Contracts.GCInfo.DecodePlatformSpecificGCInfo(gcInfoAddr, gcVersion);
+                                uint startPC = gcFrame.ClauseForCatchHandlerStartPC;
+                                uint endPC = gcFrame.ClauseForCatchHandlerEndPC;
+                                foreach (var range in _target.Contracts.GCInfo.GetInterruptibleRanges(gcHandle))
                                 {
-                                    relOffsetOverride = startPC;
-                                    break;
-                                }
-                                if (range.StartOffset < endPC)
-                                {
-                                    relOffsetOverride = range.StartOffset;
-                                    break;
+                                    if (range.EndOffset <= startPC)
+                                        continue;
+                                    if (startPC >= range.StartOffset && startPC < range.EndOffset)
+                                    {
+                                        relOffsetOverride = startPC;
+                                        break;
+                                    }
+                                    if (range.StartOffset < endPC)
+                                    {
+                                        relOffsetOverride = range.StartOffset;
+                                        break;
+                                    }
                                 }
                             }
+
+                            _gcScanner.EnumGcRefsForManagedFrame(gcFrame.Frame.Context, cbh.Value, gcOptions, scanContext, relOffsetOverride);
                         }
-
-                        _gcScanner.EnumGcRefsForManagedFrame(gcFrame.Frame.Context, cbh.Value, gcOptions, scanContext, relOffsetOverride);
-                    }
-                    else
-                    {
-                        _gcScanner.GcScanRoots(gcFrame.Frame.FrameAddress, scanContext);
-
-                        // x86-only: the cDAC cannot reliably continue walking past a transition
-                        // Frame because the EBP-chain unwind needs the callee's cbStackPop
-                        // (which depends on a not-yet-ported ArgIterator). Record the entire
-                        // upstream walk as deferred so the stress harness treats any further
-                        // runtime-only frames as known-not-implemented rather than mismatches.
-                        if (_target.Contracts.RuntimeInfo.GetTargetArchitecture() == RuntimeInfoArchitecture.X86
-                            && IsTransitionFrame(gcFrame.Frame.FrameAddress))
+                        else
                         {
-                            scanContext.RecordDeferredWalk(pFrame);
+                            _gcScanner.GcScanRoots(gcFrame.Frame.FrameAddress, scanContext);
                         }
                     }
                 }
+                catch (DeferredWalkException)
+                {
+                    // The deferred-walk signal must reach the outer catch even if a future
+                    // body change adds a code path that triggers a frame-handler from within
+                    // the loop -- the generic catch below would otherwise swallow it.
+                    throw;
+                }
+                catch (System.Exception ex)
+                {
+                    // Per-frame exceptions are intentionally swallowed to provide partial results
+                    // rather than failing the entire stack walk. This matches the resilience model
+                    // of the legacy DAC. Callers can detect incomplete results by comparing counts.
+                    Debug.WriteLine($"Exception during WalkStackReferences at IP=0x{gcFrame.Frame.Context.InstructionPointer:X}: {ex.GetType().Name}: {ex.Message}");
+                }
             }
-            catch (System.Exception ex)
-            {
-                // Per-frame exceptions are intentionally swallowed to provide partial results
-                // rather than failing the entire stack walk. This matches the resilience model
-                // of the legacy DAC. Callers can detect incomplete results by comparing counts.
-                Debug.WriteLine($"Exception during WalkStackReferences at IP=0x{gcFrame.Frame.Context.InstructionPointer:X}: {ex.GetType().Name}: {ex.Message}");
-            }
+        }
+        catch (DeferredWalkException)
+        {
+            // A frame handler signaled that cDAC cannot reliably continue past the
+            // current Frame (today: x86 transition Frames -- the EBP-chain unwind
+            // needs the callee's cbStackPop, which depends on a not-yet-ported
+            // ArgIterator). Record the remainder of the walk as deferred so the
+            // stress harness treats further runtime-only frames as known-not-
+            // implemented rather than mismatches.
+            scanContext.RecordDeferredWalk(scanContext.Frame);
         }
 
         // Report the thread's GCFrame (GCPROTECT) chain: each GCFrame keeps a set of object
@@ -1270,32 +1279,4 @@ internal partial class StackWalk_1 : IStackWalk
     }
 
     #endregion Interpreter
-
-    /// <summary>
-    /// Returns true if the Frame at <paramref name="frameAddress"/> is a "transition Frame":
-    /// a runtime helper Frame pushed when control crosses a managed -> native -> managed
-    /// transition where the JIT cannot inline the unwind. On x86 these Frames need a
-    /// callee-popped argument byte count (cbStackPop) to recover the caller's SP, and the
-    /// cDAC cannot compute that for every kind yet.
-    /// </summary>
-    private bool IsTransitionFrame(TargetPointer frameAddress)
-    {
-        if (frameAddress == TargetPointer.Null)
-            return false;
-        Data.Frame frameData = _target.ProcessedData.GetOrAdd<Data.Frame>(frameAddress);
-        FrameType frameType = _frameHelpers.GetFrameType(frameData.Identifier);
-        switch (frameType)
-        {
-            case FrameType.FramedMethodFrame:
-            case FrameType.PInvokeCalliFrame:
-            case FrameType.PrestubMethodFrame:
-            case FrameType.StubDispatchFrame:
-            case FrameType.CallCountingHelperFrame:
-            case FrameType.ExternalMethodFrame:
-            case FrameType.DynamicHelperFrame:
-                return true;
-            default:
-                return false;
-        }
-    }
 }

@@ -70,4 +70,14 @@ internal class X86FrameHandler(Target target, ContextHolder<X86Context> contextH
         _context.Context.Eip = evalContext.Context.Eip;
         _context.Context.Esp = evalContext.Context.Esp;
     }
+
+    public override void HandleTransitionFrame(FramedMethodFrame framedMethodFrame)
+    {
+        // On x86 capital-F TransitionFrames are not handled accurately: native
+        // adds cbStackPop (callee-popped arg byte count, derived from ArgIterator)
+        // when unwinding to the caller, and cDAC has no ArgIterator port yet. Do
+        // the base unwind and signal that everything above this Frame is unreliable.
+        base.HandleTransitionFrame(framedMethodFrame);
+        throw new DeferredWalkException();
+    }
 }

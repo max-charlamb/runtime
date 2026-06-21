@@ -232,13 +232,10 @@ public class GCArgTable
                         else
                         {
                             // "This pointer liveness encoding" (val & 0x80 == 0 && val & 0x0F == 0):
-                            // metadata for which callee-saved register holds the 'this' pointer
-                            // at the next call site. Native (gc_unwind_x86.inl ~line 970) does NOT
-                            // record a call entry here -- it only sets thisPtrReg. Adding a spurious
-                            // GcTransitionCall at the current curOffs would overwrite the real
-                            // call site's CallRegisters during EnumerateLiveSlots (since the
-                            // partial-EBP decoder may emit the this-ptr tag at the same curOffs
-                            // as a real call site), so we just consume the byte and continue.
+                            // the byte names the callee-saved register holding 'this' at the
+                            // *next* call site -- it does not itself describe a call. We don't
+                            // track thisPtrReg, so skip without emitting a transition.
+                            // Mirrors scanArgRegTable in gc_unwind_x86.inl.
                             continue;
                         }
                     }

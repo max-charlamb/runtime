@@ -25,9 +25,8 @@ internal partial class TransitionBlock : IData<TransitionBlock>
 
     /// <summary>
     /// Address just past the end of the TransitionBlock, where caller-pushed
-    /// stack arguments begin. On x86 this is where GCRefMap positions
-    /// >= NUM_ARGUMENT_REGISTERS map to (see native OffsetFromGCRefMapPos).
+    /// stack arguments begin.
     /// </summary>
-    [FieldAddress]
+    [InstanceDataStart]
     public TargetPointer OffsetOfArgs { get; }
 }

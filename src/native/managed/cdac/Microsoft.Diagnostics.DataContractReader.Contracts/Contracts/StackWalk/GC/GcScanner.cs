@@ -200,7 +200,7 @@ internal class GcScanner
         {
             int pos = decoder.CurrentPos;
             GCRefMapToken token = decoder.ReadToken();
-            TargetPointer slotAddress = AddressFromGCRefMapPos(tb, pos);
+            TargetPointer slotAddress = GetGCRefMapSlotAddress(tb, pos);
 
             switch (token)
             {
@@ -234,26 +234,20 @@ internal class GcScanner
         const int DynamicHelperFrameFlags_ObjectArg2 = 2;
 
         Data.TransitionBlock tb = _target.ProcessedData.GetOrAdd<Data.TransitionBlock>(transitionBlock);
-        TargetPointer argRegStart = tb.ArgumentRegisters;
 
-        // x86 lays out ArgumentRegisters as { EDX, ECX } (see ENUM_ARGUMENT_REGISTERS_BACKWARD
-        // in src/coreclr/vm/i386/cgencpu.h). Native DynamicHelperFrame::GcScanRoots_Impl reports
-        // ObjectArg at offsetof(ArgumentRegisters, ECX) and ObjectArg2 at offsetof(EDX), which
-        // is the reverse of the layout-order indices used on other architectures.
-        bool isX86 = _target.Contracts.RuntimeInfo.GetTargetArchitecture() is RuntimeInfoArchitecture.X86;
-        int objectArgOffset = isX86 ? _target.PointerSize : 0;
-        int objectArg2Offset = isX86 ? 0 : _target.PointerSize;
-
+        // ObjectArg / ObjectArg2 are simply GCRefMap positions 0 and 1.
+        // Mirrors native DynamicHelperFrame::GcScanRoots_Impl, which reports
+        // ObjectArg at offsetof(ArgumentRegisters, ECX) and ObjectArg2 at
+        // offsetof(EDX) on x86 -- the reverse layout is handled inside the
+        // shared GetGCRefMapSlotAddress helper.
         if ((dynamicHelperFrameFlags & DynamicHelperFrameFlags_ObjectArg) != 0)
         {
-            TargetPointer argAddr = new(argRegStart.Value + (uint)objectArgOffset);
-            scanContext.GCReportCallback(argAddr, GcScanFlags.None);
+            scanContext.GCReportCallback(GetGCRefMapSlotAddress(tb, 0), GcScanFlags.None);
         }
 
         if ((dynamicHelperFrameFlags & DynamicHelperFrameFlags_ObjectArg2) != 0)
         {
-            TargetPointer argAddr = new(argRegStart.Value + (uint)objectArg2Offset);
-            scanContext.GCReportCallback(argAddr, GcScanFlags.None);
+            scanContext.GCReportCallback(GetGCRefMapSlotAddress(tb, 1), GcScanFlags.None);
         }
     }
 
@@ -350,25 +344,28 @@ internal class GcScanner
         scanContext.RecordDeferredFrame(frameAddress);
     }
 
-    private TargetPointer AddressFromGCRefMapPos(Data.TransitionBlock tb, int pos)
+    private TargetPointer GetGCRefMapSlotAddress(Data.TransitionBlock tb, int pos)
     {
+        // Returns the address of the n-th GCRefMap slot in a TransitionBlock,
+        // mapping pos -> {ECX, EDX, stack...} on x86 (reversed arg-reg order)
+        // and pos -> {arg0, arg1, ..., stack...} on other arches.
+        // Mirrors native OffsetFromGCRefMapPos (frames.cpp).
+        //
         // x86 needs special handling because:
         //  - m_argumentRegisters is the FIRST field of TransitionBlock (offset 0)
         //    and is laid out in ENUM_ARGUMENT_REGISTERS_BACKWARD order, so the
         //    first two GCRefMap positions map to reverse offsets within ArgRegs.
         //  - Stack args begin at sizeof(TransitionBlock) (= OffsetOfArgs), after
-        //    CalleeSavedRegisters + ReturnAddress. There is a 20-byte gap between
-        //    the arg-regs area and OffsetOfArgs that is NOT walked by GCRefMap
+        //    CalleeSavedRegisters + ReturnAddress. There is a gap between the
+        //    arg-regs area and OffsetOfArgs that is NOT walked by GCRefMap
         //    positions, so `FirstGCRefMapSlot + pos * PointerSize` (the default
         //    on other arches) is wrong for pos >= NUM_ARGUMENT_REGISTERS.
-        // Mirrors native OffsetFromGCRefMapPos (frames.cpp).
         if (_target.Contracts.RuntimeInfo.GetTargetArchitecture() is RuntimeInfoArchitecture.X86)
         {
             const int x86NumArgRegs = 2;
-            int x86ArgRegsSize = x86NumArgRegs * _target.PointerSize;
             if (pos < x86NumArgRegs)
             {
-                int offset = x86ArgRegsSize - (pos + 1) * _target.PointerSize;
+                int offset = (x86NumArgRegs - 1 - pos) * _target.PointerSize;
                 return new TargetPointer(tb.ArgumentRegisters.Value + (ulong)offset);
             }
             int stackOffset = (pos - x86NumArgRegs) * _target.PointerSize;
