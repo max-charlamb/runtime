@@ -235,19 +235,27 @@ internal class GcScanner
 
         Data.TransitionBlock tb = _target.ProcessedData.GetOrAdd<Data.TransitionBlock>(transitionBlock);
 
-        // ObjectArg / ObjectArg2 are simply GCRefMap positions 0 and 1.
-        // Mirrors native DynamicHelperFrame::GcScanRoots_Impl, which reports
-        // ObjectArg at offsetof(ArgumentRegisters, ECX) and ObjectArg2 at
-        // offsetof(EDX) on x86 -- the reverse layout is handled inside the
-        // shared GetGCRefMapSlotAddress helper.
+        // ObjectArg / ObjectArg2 refer to the first two slots of m_argumentRegisters
+        // (x0/x1 on arm64, rcx/rdx on amd64, EDX/ECX on x86). This is NOT the same as
+        // GCRefMap position 0/1, which on arm64 starts at m_x8RetBuffReg -- so we go
+        // through the argument-register address directly (not GetGCRefMapSlotAddress).
+        // Mirrors native DynamicHelperFrame::GcScanRoots_Impl (frames.cpp), which
+        // reports ObjectArg at offsetof(ArgumentRegisters, ECX) and ObjectArg2 at
+        // offsetof(EDX) on x86 -- the reverse of layout-order indices.
+        bool isX86 = _target.Contracts.RuntimeInfo.GetTargetArchitecture() is RuntimeInfoArchitecture.X86;
+        int objectArgOffset = isX86 ? _target.PointerSize : 0;
+        int objectArg2Offset = isX86 ? 0 : _target.PointerSize;
+
         if ((dynamicHelperFrameFlags & DynamicHelperFrameFlags_ObjectArg) != 0)
         {
-            scanContext.GCReportCallback(GetGCRefMapSlotAddress(tb, 0), GcScanFlags.None);
+            TargetPointer argAddr = new(tb.ArgumentRegisters.Value + (ulong)objectArgOffset);
+            scanContext.GCReportCallback(argAddr, GcScanFlags.None);
         }
 
         if ((dynamicHelperFrameFlags & DynamicHelperFrameFlags_ObjectArg2) != 0)
         {
-            scanContext.GCReportCallback(GetGCRefMapSlotAddress(tb, 1), GcScanFlags.None);
+            TargetPointer argAddr = new(tb.ArgumentRegisters.Value + (ulong)objectArg2Offset);
+            scanContext.GCReportCallback(argAddr, GcScanFlags.None);
         }
     }
 
