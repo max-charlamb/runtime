@@ -121,7 +121,7 @@ internal readonly struct CdacTypeHandle : ITypeHandle
 
     public void GetSystemVAmd64PassStructInRegisterDescriptor(out SYSTEMV_AMD64_CORINFO_STRUCT_REG_PASSING_DESCRIPTOR descriptor)
     {
-        throw new NotImplementedException("SystemV AMD64 struct-in-registers is not yet supported by the cDAC.");
+        SystemVStructClassifier.TryClassify(_target, _typeHandle, out descriptor);
     }
 
     public FpStructInRegistersInfo GetFpStructInRegistersInfo(Internal.TypeSystem.TargetArchitecture architecture)

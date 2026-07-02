@@ -615,6 +615,51 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
     public bool ContainsGCPointers(TypeHandle typeHandle) => !typeHandle.IsMethodTable() ? false : _methodTables[typeHandle.Address].Flags.ContainsGCPointers;
     public bool IsByRefLike(TypeHandle typeHandle) => typeHandle.IsMethodTable() && _methodTables[typeHandle.Address].Flags.IsByRefLike;
 
+    public IntrinsicTypeKind GetIntrinsicKind(TypeHandle typeHandle)
+    {
+        // Fast reject: the flag check is a single MT-flag read; the metadata
+        // lookup below is orders of magnitude more expensive.
+        if (!typeHandle.IsMethodTable() || !_methodTables[typeHandle.Address].Flags.IsIntrinsicType)
+            return IntrinsicTypeKind.None;
+
+        try
+        {
+            TargetPointer modulePtr = ((IRuntimeTypeSystem)this).GetModule(typeHandle);
+            if (modulePtr == TargetPointer.Null)
+                return IntrinsicTypeKind.None;
+
+            ModuleHandle moduleHandle = _target.Contracts.Loader.GetModuleHandleFromModulePtr(modulePtr);
+            MetadataReader? reader = _target.Contracts.EcmaMetadata.GetMetadata(moduleHandle);
+            if (reader is null)
+                return IntrinsicTypeKind.None;
+
+            uint typeDefToken = ((IRuntimeTypeSystem)this).GetTypeDefToken(typeHandle);
+            EntityHandle handle = MetadataTokens.EntityHandle((int)typeDefToken);
+            if (handle.IsNil || handle.Kind != HandleKind.TypeDefinition)
+                return IntrinsicTypeKind.None;
+
+            TypeDefinition typeDef = reader.GetTypeDefinition((TypeDefinitionHandle)handle);
+            string className = reader.GetString(typeDef.Name);
+            string namespaceName = reader.GetString(typeDef.Namespace);
+
+            return (namespaceName, className) switch
+            {
+                ("System.Runtime.Intrinsics", "Vector64`1") => IntrinsicTypeKind.Vector64,
+                ("System.Runtime.Intrinsics", "Vector128`1") => IntrinsicTypeKind.Vector128,
+                ("System.Runtime.Intrinsics", "Vector256`1") => IntrinsicTypeKind.Vector256,
+                ("System.Runtime.Intrinsics", "Vector512`1") => IntrinsicTypeKind.Vector512,
+                ("System.Numerics", "Vector`1") => IntrinsicTypeKind.NumericsVector,
+                ("System", "Int128") => IntrinsicTypeKind.Int128,
+                ("System", "UInt128") => IntrinsicTypeKind.UInt128,
+                _ => IntrinsicTypeKind.None,
+            };
+        }
+        catch
+        {
+            return IntrinsicTypeKind.None;
+        }
+    }
+
     private bool IsFeatureHfaTarget(out RuntimeInfoArchitecture arch)
     {
         arch = _target.Contracts.RuntimeInfo.GetTargetArchitecture();
@@ -641,7 +686,7 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         }
 
         TypeHandle current = typeHandle;
-        for (int depth = 0; depth < 16; depth++)
+        for (int depth = 0; depth < 128; depth++)
         {
             int vectorElem = GetVectorHFAElementSize(current);
             if (vectorElem != 0)
@@ -684,76 +729,39 @@ internal partial struct RuntimeTypeSystem_1 : IRuntimeTypeSystem
         return false;
     }
 
-    // Mirrors MethodTable::GetVectorHFA in src/coreclr/vm/class.cpp. Any
-    // metadata decode failure returns 0 (treated as "not an HVA").
+    // Mirrors MethodTable::GetVectorHFA in src/coreclr/vm/class.cpp.
     private int GetVectorHFAElementSize(TypeHandle typeHandle)
     {
-        if (!typeHandle.IsMethodTable() || !_methodTables[typeHandle.Address].Flags.IsIntrinsicType)
+        IntrinsicTypeKind kind = ((IRuntimeTypeSystem)this).GetIntrinsicKind(typeHandle);
+
+        int elemSize = kind switch
+        {
+            IntrinsicTypeKind.Vector64 => 8,
+            IntrinsicTypeKind.Vector128 => 16,
+            IntrinsicTypeKind.NumericsVector => ((IRuntimeTypeSystem)this).GetNumInstanceFieldBytes(typeHandle) switch
+            {
+                8 => 8,
+                16 => 16,
+                _ => 0,
+            },
+            // HVA is only defined for 8/16-byte element sizes. Vector256/512
+            // are recognized as intrinsic vectors but are never HVA.
+            // Int128/UInt128 aren't HVA-shaped at all.
+            _ => 0,
+        };
+
+        if (elemSize == 0)
             return 0;
 
-        try
-        {
-            TargetPointer modulePtr = ((IRuntimeTypeSystem)this).GetModule(typeHandle);
-            if (modulePtr == TargetPointer.Null)
-                return 0;
-
-            ModuleHandle moduleHandle = _target.Contracts.Loader.GetModuleHandleFromModulePtr(modulePtr);
-            MetadataReader? reader = _target.Contracts.EcmaMetadata.GetMetadata(moduleHandle);
-            if (reader is null)
-                return 0;
-
-            uint typeDefToken = ((IRuntimeTypeSystem)this).GetTypeDefToken(typeHandle);
-            if (EcmaMetadataUtils.GetRowId(typeDefToken) == 0)
-                return 0;
-
-            EntityHandle handle = (EntityHandle)MetadataTokens.Handle((int)typeDefToken);
-            if (handle.Kind != HandleKind.TypeDefinition)
-                return 0;
-
-            TypeDefinition typeDef = reader.GetTypeDefinition((TypeDefinitionHandle)handle);
-            string className = reader.GetString(typeDef.Name);
-            string namespaceName = reader.GetString(typeDef.Namespace);
-
-            int elemSize;
-            if (className == "Vector`1" && namespaceName == "System.Numerics")
-            {
-                elemSize = ((IRuntimeTypeSystem)this).GetNumInstanceFieldBytes(typeHandle) switch
-                {
-                    8 => 8,
-                    16 => 16,
-                    _ => 0,
-                };
-            }
-            else if (className == "Vector128`1" && namespaceName == "System.Runtime.Intrinsics")
-            {
-                elemSize = 16;
-            }
-            else if (className == "Vector64`1" && namespaceName == "System.Runtime.Intrinsics")
-            {
-                elemSize = 8;
-            }
-            else
-            {
-                return 0;
-            }
-
-            if (elemSize == 0)
-                return 0;
-
-            ReadOnlySpan<TypeHandle> instantiation = ((IRuntimeTypeSystem)this).GetInstantiation(typeHandle);
-            if (instantiation.Length < 1)
-                return 0;
-
-            CorElementType argType = ((IRuntimeTypeSystem)this).GetSignatureCorElementType(instantiation[0]);
-            if (!IsCorNumericalType(argType))
-                return 0;
-
-            return elemSize;
-        }
-        catch
-        {
+        // T must be a numerical primitive (CorIsNumericalType in cor.h).
+        ReadOnlySpan<TypeHandle> instantiation = ((IRuntimeTypeSystem)this).GetInstantiation(typeHandle);
+        if (instantiation.Length < 1)
             return 0;
-        }
+        CorElementType argType = ((IRuntimeTypeSystem)this).GetSignatureCorElementType(instantiation[0]);
+        if (!IsCorNumericalType(argType))
+            return 0;
+
+        return elemSize;
     }
 
     // Mirrors CorIsNumericalType in src/coreclr/inc/cor.h.

@@ -75,6 +75,11 @@ partial interface IRuntimeTypeSystem : IContract
     public virtual bool ContainsGCPointers(TypeHandle typeHandle);
     // True if the MethodTable represents a byref-like value type (Span<T>, ReadOnlySpan<T>, any ref struct).
     public virtual bool IsByRefLike(TypeHandle typeHandle);
+    // If the type is one of the recognized intrinsic wrappers used by the
+    // ABI classifiers (Vector64/128/256/512, System.Numerics.Vector<T>,
+    // Int128, UInt128), returns the matching IntrinsicTypeKind. Returns
+    // IntrinsicTypeKind.None otherwise.
+    public virtual IntrinsicTypeKind GetIntrinsicKind(TypeHandle typeHandle);
     // If the type is an HFA (or HVA on ARM64), returns true and sets elementSize
     // to 4, 8, or 16. Returns false otherwise (including on targets that don't
     // define FEATURE_HFA). Mirrors MethodTable::GetHFAType in
@@ -719,6 +724,14 @@ Contracts used:
     //       if !CorIsNumericalType(GetInstantiation(mt)[0]): return 0
     //       return elem
     public bool TryGetHFAElementSize(TypeHandle typeHandle, out int elementSize) { ... }
+
+    // Fast-reject on the IsIntrinsic flag, then TypeDef name+namespace match:
+    //   System.Runtime.Intrinsics.Vector64/128/256/512`1 -> Vector64/128/256/512
+    //   System.Numerics.Vector`1                          -> NumericsVector
+    //   System.Int128 / System.UInt128                    -> Int128 / UInt128
+    //   anything else                                     -> None
+    // Metadata decode errors are swallowed and return None.
+    public IntrinsicTypeKind GetIntrinsicKind(TypeHandle typeHandle) { ... }
 
     public bool RequiresAlign8(TypeHandle typeHandle) => !typeHandle.IsMethodTable() ? false : _methodTables[typeHandle.Address].Flags.RequiresAlign8;
 

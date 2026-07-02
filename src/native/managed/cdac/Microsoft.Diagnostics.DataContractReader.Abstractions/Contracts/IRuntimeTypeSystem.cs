@@ -109,6 +109,22 @@ public enum WellKnownMethodTable
     Canon,
 }
 
+// Recognized intrinsic type wrappers that consumers care about for
+// calling-convention classification (HFA/HVA and SystemV eightbyte
+// rejection). Any type without the [Intrinsic] attribute, or an
+// intrinsic type not in this enum, resolves to `None`.
+public enum IntrinsicTypeKind
+{
+    None,
+    Vector64,        // System.Runtime.Intrinsics.Vector64<T>
+    Vector128,       // System.Runtime.Intrinsics.Vector128<T>
+    Vector256,       // System.Runtime.Intrinsics.Vector256<T>
+    Vector512,       // System.Runtime.Intrinsics.Vector512<T>
+    NumericsVector,  // System.Numerics.Vector<T>
+    Int128,          // System.Int128
+    UInt128,         // System.UInt128
+}
+
 
 public interface IRuntimeTypeSystem : IContract
 {
@@ -152,6 +168,12 @@ public interface IRuntimeTypeSystem : IContract
     bool ContainsGCPointers(TypeHandle typeHandle) => throw new NotImplementedException();
     // True if MethodTable represents a byreflike value (Span<T>, ReadOnlySpan<T>, etc.).
     bool IsByRefLike(TypeHandle typeHandle) => throw new NotImplementedException();
+    // If the type is one of the recognized intrinsic wrappers used by the
+    // ABI classifiers (Vector64/128/256/512, System.Numerics.Vector<T>,
+    // Int128, UInt128), returns the matching kind. Returns
+    // IntrinsicTypeKind.None otherwise. Requires metadata to be readable
+    // for the type's module.
+    IntrinsicTypeKind GetIntrinsicKind(TypeHandle typeHandle) => throw new NotImplementedException();
     // If the type is an HFA (or HVA on ARM64), returns true and sets elementSize
     // to 4, 8, or 16. Returns false otherwise (including on targets that don't
     // define FEATURE_HFA). Mirrors MethodTable::GetHFAType in
