@@ -157,7 +157,8 @@ public abstract class CdacStressTestBase
 
     /// <summary>
     /// Asserts the GCREFS stress run produced a <c>[GC_STATS]</c> summary
-    /// with at least one verification and no hard failures.
+    /// with at least one verification, no hard failures, and no deferred
+    /// (known-issue) frames.
     /// </summary>
     internal static void AssertAllPassed(CdacStressResults results, string debuggeeName)
     {
@@ -173,30 +174,18 @@ public abstract class CdacStressTestBase
             "did not initialize correctly.\n" +
             $"Log: {results.LogFilePath}");
 
-        if (results.Failed > 0)
+        // A KnownIssue means the cDAC recorded a deferred frame (transition
+        // Frame whose caller-stack refs couldn't be enumerated via
+        // ICallingConvention.TryComputeArgGCRefMapBlob). Every frame should be
+        // enumerable, so any KnownIssue is a regression -- treated the same as
+        // a hard failure.
+        if (results.Failed > 0 || results.KnownIssues > 0)
         {
             string analysis = results.AnalyzeFailures(maxFailures: 3);
             Assert.Fail(
                 $"GCREFS stress test '{debuggeeName}' had {results.Failed} failure(s) " +
-                $"out of {results.TotalVerifications} verifications " +
-                $"({results.KnownIssues} known issue(s) tolerated).\n" +
-                $"Log: {results.LogFilePath}\n\n{analysis}");
-        }
-
-        // Every Frame's caller-arg refs are enumerated via the GCRefMap blob
-        // synthesized by ICallingConvention -- there should be no deferred
-        // frames at all, so any KnownIssue count is a regression.
-        if (results.KnownIssues > 0)
-        {
-            string analysis = results.AnalyzeFailures(maxFailures: 3);
-            Assert.Fail(
-                $"GCREFS stress test '{debuggeeName}' had {results.KnownIssues} known issue(s) " +
-                $"out of {results.TotalVerifications} verifications. " +
-                "Every transition Frame's caller-stack refs should be enumerated via " +
-                "ICallingConvention.TryComputeArgGCRefMapBlob with no deferred frames. " +
-                "A non-zero KnownIssues count indicates the encoder declined a method it " +
-                "should support (e.g. a regression in ComputeArgGCRefMapBlobCore or a new " +
-                "code path returning E_NOTIMPL).\n" +
+                $"and {results.KnownIssues} known issue(s) out of " +
+                $"{results.TotalVerifications} verifications.\n" +
                 $"Log: {results.LogFilePath}\n\n{analysis}");
         }
     }
