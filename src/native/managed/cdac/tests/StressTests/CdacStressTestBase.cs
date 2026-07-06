@@ -174,11 +174,6 @@ public abstract class CdacStressTestBase
             "did not initialize correctly.\n" +
             $"Log: {results.LogFilePath}");
 
-        // A KnownIssue means the cDAC recorded a deferred frame (transition
-        // Frame whose caller-stack refs couldn't be enumerated via
-        // ICallingConvention.TryComputeArgGCRefMapBlob). Every frame should be
-        // enumerable, so any KnownIssue is a regression -- treated the same as
-        // a hard failure.
         if (results.Failed > 0 || results.KnownIssues > 0)
         {
             string analysis = results.AnalyzeFailures(maxFailures: 3);
