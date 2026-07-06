@@ -634,7 +634,7 @@ internal static unsafe class Program
     [MethodImpl(MethodImplOptions.NoInlining)] private static void SysVThreeRefs(SysVThreeRefsStruct s) { AllocBurst(); GC.KeepAlive(s.R1); GC.KeepAlive(s.R2); GC.KeepAlive(s.R3); }
     [MethodImpl(MethodImplOptions.NoInlining)] private static void SysVVector128Arg(Vector128<int> v) { AllocBurst(); GC.KeepAlive((object)v.GetElement(0)); }
     [MethodImpl(MethodImplOptions.NoInlining)] private static void SysVInt128Arg(Int128Wrapper s) { AllocBurst(); GC.KeepAlive((object)s.V.ToString()); }
-    [MethodImpl(MethodImplOptions.NoInlining)] private static void SysVEmpty(EmptyStruct s) { AllocBurst(); GC.KeepAlive((object)s.ToString()!); }
+    [MethodImpl(MethodImplOptions.NoInlining)] private static void SysVEmpty(EmptyStruct s) { AllocBurst(); GC.KeepAlive((object)s); }
     [MethodImpl(MethodImplOptions.NoInlining)] private static void SysVSmall(SmallUnaligned s) { AllocBurst(); GC.KeepAlive((object)(s.A + s.B)); }
     [MethodImpl(MethodImplOptions.NoInlining)] private static void SysVWrapInt(WrapInt s) { AllocBurst(); GC.KeepAlive((object)s.A); }
     [MethodImpl(MethodImplOptions.NoInlining)] private static void SysVIntFloatUnion(IntFloatUnion s) { AllocBurst(); GC.KeepAlive((object)s.I); }
