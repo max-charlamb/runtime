@@ -42,7 +42,7 @@ internal static class SystemVStructClassifier
 
         // Reject intrinsic SIMD Vector types and Int128/UInt128: they are
         // handled specially by the JIT and are not passed as struct registers.
-        // See MethodTable::ClassifyEightBytesWithManagedLayout in class.cpp.
+        // See MethodTable::ClassifyEightBytesWithManagedLayout in methodtable.cpp.
         if (IsRejectedIntrinsic(target, typeHandle))
             return false;
 
@@ -150,6 +150,15 @@ internal static class SystemVStructClassifier
     {
         IRuntimeTypeSystem rts = target.Contracts.RuntimeTypeSystem;
 
+        // Reject intrinsic Vector wrappers and Int128 at every recursion level:
+        // an outer struct containing a Vector128<T> field must also fail.
+        // Mirrors MethodTable::ClassifyEightBytesWithManagedLayout in methodtable.cpp.
+        // This must run before the empty-struct fast-path below because an
+        // intrinsic type could hypothetically have zero managed instance
+        // fields (all its state is compiler-injected).
+        if (IsRejectedIntrinsic(target, typeHandle))
+            return false;
+
         int numInstanceFields = 0;
         foreach (TargetPointer fd in rts.GetFieldDescList(typeHandle))
         {
@@ -164,12 +173,6 @@ internal static class SystemVStructClassifier
             AssignClassifiedEightByteTypes(ref helper);
             return true;
         }
-
-        // Reject intrinsic Vector wrappers and Int128 at every recursion level:
-        // an outer struct containing a Vector128<T> field must also fail.
-        // Mirrors MethodTable::ClassifyEightBytesWithManagedLayout.
-        if (IsRejectedIntrinsic(target, typeHandle))
-            return false;
 
         foreach (TargetPointer fd in rts.GetFieldDescList(typeHandle))
         {
@@ -324,6 +327,7 @@ internal static class SystemVStructClassifier
 
         int usedEightBytes = 0;
         int accumulatedSizeForEightBytes = 0;
+        bool foundFieldInEightByte = false;
         for (int offset = 0; offset < helper.StructSize; offset++)
         {
             SystemVClassificationType fieldClass;
@@ -339,9 +343,12 @@ internal static class SystemVStructClassifier
                 fieldClass = offset < offsetAfterLastFieldByte
                     ? SystemVClassificationTypeNoClass
                     : lastFieldClass;
+                if (offset % SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES == 0)
+                    foundFieldInEightByte = false;
             }
             else
             {
+                foundFieldInEightByte = true;
                 fieldSize = helper.FieldSizes[ordinal];
                 fieldClass = helper.FieldClassifications[ordinal];
             }
@@ -352,6 +359,9 @@ internal static class SystemVStructClassifier
 
             usedEightBytes = Math.Max(usedEightBytes, fieldEndEightByte + 1);
 
+            // Merge rules mirror SystemVStructClassificator.cs. Ordered from
+            // most-specific to most-general; the JIT rejects Reference/ByRef
+            // never merging with SSE/Integer at the same eightbyte (asserted).
             for (int eb = fieldStartEightByte; eb <= fieldEndEightByte; eb++)
             {
                 SystemVClassificationType existing = helper.EightByteClassifications[eb];
@@ -363,19 +373,40 @@ internal static class SystemVStructClassifier
                 {
                     helper.EightByteClassifications[eb] = fieldClass;
                 }
-                else if ((existing == SystemVClassificationTypeInteger && fieldClass == SystemVClassificationTypeIntegerReference)
-                    || (existing == SystemVClassificationTypeIntegerReference && fieldClass == SystemVClassificationTypeInteger))
+                else if (existing == SystemVClassificationTypeInteger
+                    || fieldClass == SystemVClassificationTypeInteger)
+                {
+                    Debug.Assert(fieldClass != SystemVClassificationTypeIntegerReference);
+                    Debug.Assert(fieldClass != SystemVClassificationTypeIntegerByRef);
+                    helper.EightByteClassifications[eb] = SystemVClassificationTypeInteger;
+                }
+                else if (existing == SystemVClassificationTypeIntegerReference
+                    || fieldClass == SystemVClassificationTypeIntegerReference)
                 {
                     helper.EightByteClassifications[eb] = SystemVClassificationTypeIntegerReference;
                 }
-                else if ((existing == SystemVClassificationTypeInteger && fieldClass == SystemVClassificationTypeIntegerByRef)
-                    || (existing == SystemVClassificationTypeIntegerByRef && fieldClass == SystemVClassificationTypeInteger))
+                else if (existing == SystemVClassificationTypeIntegerByRef
+                    || fieldClass == SystemVClassificationTypeIntegerByRef)
                 {
                     helper.EightByteClassifications[eb] = SystemVClassificationTypeIntegerByRef;
                 }
                 else
                 {
-                    helper.EightByteClassifications[eb] = SystemVClassificationTypeInteger;
+                    helper.EightByteClassifications[eb] = SystemVClassificationTypeSSE;
+                }
+            }
+
+            // Just finished an eightbyte (or the whole struct)? Normalize any
+            // fieldless-eightbyte classification. The JIT can't consume a
+            // NoClass eightbyte, so promote it to Integer (as if the struct
+            // had a char[8] padding). Mirrors SystemVStructClassificator.cs.
+            if ((offset + 1) % SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES == 0 || (offset + 1) == helper.StructSize)
+            {
+                if (!foundFieldInEightByte)
+                {
+                    int eb = offset / SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES;
+                    if (helper.EightByteClassifications[eb] == SystemVClassificationTypeNoClass)
+                        helper.EightByteClassifications[eb] = SystemVClassificationTypeInteger;
                 }
             }
 
