@@ -219,5 +219,5 @@ public enum DataType
 public static class DataTypeTargetExtensions
 {
     public static Target.TypeInfo GetTypeInfo(this Target target, DataType type)
-        => target.GetTypeInfo(type.ToString());
+        => target.GetTypeInfo(type.ToName());
 }

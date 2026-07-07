@@ -210,7 +210,7 @@ public sealed unsafe class ContractDescriptorTarget : Target
         HashSet<string> seenGlobalNames = [];
 
         // Set pointer type size
-        types[DataType.pointer.ToString()] = new TypeInfo { Size = (uint)_config.PointerSize };
+        types[nameof(DataType.pointer)] = new TypeInfo { Size = (uint)_config.PointerSize };
 
         foreach (Descriptor descriptor in _descriptors)
         {

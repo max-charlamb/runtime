@@ -159,7 +159,28 @@ public abstract class ContractRegistry
     /// <returns>
     /// <see langword="true"/> if the requested contract is present and was retrieved successfully; <see langword="false"/> if the contract is not present or registered"/>.
     /// </returns>
-    public abstract bool TryGetContract<TContract>([NotNullWhen(true)] out TContract contract, out string? failureReason) where TContract : IContract;
+    /// <remarks>
+    /// This is intentionally a non-virtual generic method that forwards to the non-generic virtual
+    /// <see cref="TryGetContractByType"/>. Keeping the generic method non-virtual lets NativeAOT
+    /// resolve it as a direct call (no generic-virtual-method dispatch, which would require runtime
+    /// method metadata and break full reflection-free compilation).
+    /// </remarks>
+    public bool TryGetContract<TContract>([NotNullWhen(true)] out TContract contract, out string? failureReason) where TContract : IContract
+    {
+        contract = default!;
+        if (TryGetContractByType(typeof(TContract), TContract.Name, out IContract? untyped, out failureReason))
+        {
+            contract = (TContract)untyped;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Non-generic core of <see cref="TryGetContract{TContract}(out TContract, out string?)"/>.
+    /// Implementations resolve and cache the contract instance by <paramref name="contractType"/>.
+    /// </summary>
+    protected abstract bool TryGetContractByType(Type contractType, string contractName, [NotNullWhen(true)] out IContract? contract, out string? failureReason);
 
     public TContract GetContract<TContract>() where TContract : IContract
     {
@@ -179,8 +200,18 @@ public abstract class ContractRegistry
     /// Register a contract implementation for a specific version.
     /// External packages use this to add contract versions or entirely new contract interfaces.
     /// </summary>
-    public abstract void Register<TContract>(string version, Func<Target, TContract> creator)
-        where TContract : IContract;
+    /// <remarks>
+    /// Non-virtual generic method forwarding to the non-generic virtual <see cref="RegisterContract"/>
+    /// (see the remarks on <see cref="TryGetContract{TContract}(out TContract, out string?)"/>).
+    /// </remarks>
+    public void Register<TContract>(string version, Func<Target, TContract> creator)
+        where TContract : IContract
+        => RegisterContract(typeof(TContract), version, t => creator(t));
+
+    /// <summary>
+    /// Non-generic core of <see cref="Register{TContract}(string, Func{Target, TContract})"/>.
+    /// </summary>
+    protected abstract void RegisterContract(Type contractType, string version, Func<Target, IContract> creator);
 
     /// <summary>
     /// Flush all cached data held by contracts in this registry for the given

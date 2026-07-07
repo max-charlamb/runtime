@@ -616,29 +616,31 @@ public class TestPlaceholderTarget : Target
         public void SetMock<TContract>(TContract mock) where TContract : IContract
             => _mocks[typeof(TContract)] = mock;
 
-        public override void Register<TContract>(string version, Func<Target, TContract> creator)
-            => _creators[(typeof(TContract), version)] = t => creator(t);
+        public override void Flush(FlushScope scope) { }
 
-        public override bool TryGetContract<TContract>([NotNullWhen(true)] out TContract contract, out string? failureReason)
+        protected override void RegisterContract(Type contractType, string version, Func<Target, IContract> creator)
+            => _creators[(contractType, version)] = creator;
+
+        protected override bool TryGetContractByType(Type contractType, string contractName, [NotNullWhen(true)] out IContract? contract, out string? failureReason)
         {
-            contract = default!;
+            contract = null;
             failureReason = null;
-            if (_resolved.TryGetValue(typeof(TContract), out var cached))
+            if (_resolved.TryGetValue(contractType, out var cached))
             {
-                contract = (TContract)cached;
+                contract = cached;
                 return true;
             }
 
             IContract resolved;
-            if (_mocks.TryGetValue(typeof(TContract), out var mock))
+            if (_mocks.TryGetValue(contractType, out var mock))
             {
                 resolved = mock;
             }
-            else if (_versions.TryGetValue(typeof(TContract), out string? version))
+            else if (_versions.TryGetValue(contractType, out string? version))
             {
-                if (!_creators.TryGetValue((typeof(TContract), version), out var creator))
+                if (!_creators.TryGetValue((contractType, version), out var creator))
                 {
-                    failureReason = $"Target supports contract '{typeof(TContract).Name}' version {version}, but no implementation is registered for that version.";
+                    failureReason = $"Target supports contract '{contractType.Name}' version {version}, but no implementation is registered for that version.";
                     return false;
                 }
 
@@ -646,16 +648,14 @@ public class TestPlaceholderTarget : Target
             }
             else
             {
-                failureReason = $"Contract '{typeof(TContract).Name}' is not supported by the target.";
+                failureReason = $"Contract '{contractType.Name}' is not supported by the target.";
                 return false;
             }
 
-            _resolved[typeof(TContract)] = resolved;
-            contract = (TContract)resolved;
+            _resolved[contractType] = resolved;
+            contract = resolved;
             return true;
         }
-
-        public override void Flush(FlushScope scope) { }
     }
 
 }

@@ -12,6 +12,13 @@ namespace Microsoft.Diagnostics.DataContractReader.Contracts;
 /// </summary>
 public static class CoreCLRContracts
 {
+    // EXPERIMENT: minimal registration -- roots only the contracts the slim reader consumes,
+    // to measure how much the full ~40-contract graph drives EEType/metadata size.
+    public static void RegisterThreadOnly(ContractRegistry registry)
+    {
+        registry.Register<IThread>("c1", static t => new Thread_1(t));
+    }
+
     public static void Register(ContractRegistry registry)
     {
         registry.Register<IException>("c1", static t => new Exception_1(t));

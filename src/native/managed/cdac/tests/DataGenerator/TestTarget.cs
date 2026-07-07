@@ -271,20 +271,20 @@ internal sealed class TestTarget : Target
 
         public override IManagedTypeSource ManagedTypeSource => _managedTypeSource;
 
-        public override bool TryGetContract<TContract>([NotNullWhen(true)] out TContract contract, out string? failureReason)
+        protected override bool TryGetContractByType(Type contractType, string contractName, [NotNullWhen(true)] out IContract? contract, out string? failureReason)
         {
-            if (typeof(TContract) == typeof(IManagedTypeSource))
+            if (contractType == typeof(IManagedTypeSource))
             {
-                contract = (TContract)_managedTypeSource;
+                contract = _managedTypeSource;
                 failureReason = null;
                 return true;
             }
-            contract = default!;
+            contract = null;
             failureReason = "Not registered in TestContractRegistry.";
             return false;
         }
 
-        public override void Register<TContract>(string version, Func<Target, TContract> creator)
+        protected override void RegisterContract(Type contractType, string version, Func<Target, IContract> creator)
             => throw new NotImplementedException();
 
         public override void Flush(FlushScope scope) { }

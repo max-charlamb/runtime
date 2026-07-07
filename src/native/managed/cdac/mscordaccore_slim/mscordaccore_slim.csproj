@@ -1,0 +1,62 @@
+<Project>
+  <PropertyGroup>
+    <NeedsAotPublish>true</NeedsAotPublish>
+  </PropertyGroup>
+
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <AssemblyName>$(LibPrefix)$(MSBuildProjectName)</AssemblyName>
+    <!-- LibPrefix is baked into AssemblyName because Source-Build uses the NuGet SDK,
+         which doesn't set NativeBinaryPrefix. Disable UseNativeLibPrefix to prevent
+         double-prefix when building with local NativeAOT targets (bootstrap). -->
+    <UseNativeLibPrefix>false</UseNativeLibPrefix>
+    <TargetFramework>$(NetCoreAppToolCurrent)</TargetFramework>
+    <RootNamespace>Microsoft.Diagnostics.DataContractReader</RootNamespace>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Do not produce a public package. This ships as part of the runtime -->
+    <IsShippingPackage>false</IsShippingPackage>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+
+    <!-- Size is the primary constraint for the slim dump reader: it ships only the
+         contract-based ICLRDataEnumMemoryRegions surface (no Legacy SOS/DAC COM layer),
+         and turns off NativeAOT features it does not use. -->
+    <OptimizationPreference>Size</OptimizationPreference>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
+    <StackTraceSupport>true</StackTraceSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <DebuggerSupport>false</DebuggerSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <AutoreleasePoolSupport>false</AutoreleasePoolSupport>
+    <NullabilityInfoContextSupport>false</NullabilityInfoContextSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <EnableUnsafeUTF7Encoding>false</EnableUnsafeUTF7Encoding>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <InvariantTimezone>true</InvariantTimezone>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <CommonPath>$([MSBuild]::NormalizeDirectory('$(LibrariesProjectRoot)', 'Common', 'src'))</CommonPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="$(LibrariesProjectRoot)Common\src\System\HResults.cs" Link="Common\System\HResults.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <IlcArg Include="--reflectiondata:none" />
+  </ItemGroup>
+  <ItemGroup>
+    <InstallRuntimeComponentDestination Include="." />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The slim reader references only the core contract reader; the Legacy DAC/SOS
+         COM compatibility layer is intentionally excluded to minimize binary size. -->
+    <ProjectReference Include="..\Microsoft.Diagnostics.DataContractReader\Microsoft.Diagnostics.DataContractReader.csproj" GlobalPropertiesToRemove="RuntimeIdentifier" />
+  </ItemGroup>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+</Project>

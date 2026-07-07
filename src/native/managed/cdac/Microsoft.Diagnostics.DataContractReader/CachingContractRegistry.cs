@@ -33,43 +33,43 @@ internal sealed class CachingContractRegistry : ContractRegistry
         }
     }
 
-    public override void Register<TContract>(string version, Func<Target, TContract> creator)
+    protected override void RegisterContract(Type contractType, string version, Func<Target, IContract> creator)
     {
-        _creators[(typeof(TContract), version)] = t => creator(t);
+        _creators[(contractType, version)] = creator;
     }
 
-    public override bool TryGetContract<TContract>([NotNullWhen(true)] out TContract contract, out string? failureReason)
+    protected override bool TryGetContractByType(Type contractType, string contractName, [NotNullWhen(true)] out IContract? contract, out string? failureReason)
     {
-        contract = default!;
+        contract = null;
         failureReason = null;
-        if (_contracts.TryGetValue(typeof(TContract), out IContract? cached))
+        if (_contracts.TryGetValue(contractType, out IContract? cached))
         {
-            contract = (TContract)cached;
+            contract = cached;
             return true;
         }
 
         Func<Target, IContract>? creator;
-        if (_tryGetContractVersion(TContract.Name, out string? version))
+        if (_tryGetContractVersion(contractName, out string? version))
         {
-            if (!_creators.TryGetValue((typeof(TContract), version), out creator))
+            if (!_creators.TryGetValue((contractType, version), out creator))
             {
-                failureReason = $"Target supports contract '{typeof(TContract).Name}' version {version}, but no implementation is registered for that version.";
+                failureReason = $"Target supports contract '{contractType.Name}' version {version}, but no implementation is registered for that version.";
                 return false;
             }
         }
-        else if (!_creators.TryGetValue((typeof(TContract), string.Empty), out creator))
+        else if (!_creators.TryGetValue((contractType, string.Empty), out creator))
         {
-            failureReason = $"Target does not support contract '{typeof(TContract).Name}'.";
+            failureReason = $"Target does not support contract '{contractType.Name}'.";
             return false;
         }
 
-        contract = (TContract)creator(_target);
-        if (_contracts.TryAdd(typeof(TContract), contract))
+        contract = creator(_target);
+        if (_contracts.TryAdd(contractType, contract))
         {
             return true;
         }
 
-        contract = (TContract)_contracts[typeof(TContract)];
+        contract = _contracts[contractType];
         return true;
     }
 
