@@ -68,11 +68,26 @@ internal static class SystemVStructClassifier
             && runtimeInfo.GetTargetOperatingSystem() is RuntimeInfoOperatingSystem.Unix or RuntimeInfoOperatingSystem.Apple;
     }
 
-    // True for the type wrappers the JIT never passes as struct-in-registers:
-    //   * SIMD wrappers (Vector64/128/256/512, System.Numerics.Vector<T>)
-    //   * Int128 / UInt128 (ABI __int128 primitives)
+    // True for the SIMD intrinsic wrappers the runtime SysV classifier
+    // explicitly rejects from register passing in
+    // MethodTable::ClassifyEightBytesWithManagedLayout: Vector64/128/256/512
+    // and System.Numerics.Vector<T>.
+    //
+    // Note: the runtime does *not* reject Int128/UInt128 by name here --
+    // Int128 falls through to the field walker, where its two `ulong` fields
+    // classify as two Integer eightbytes (register-passed). Crossgen2's
+    // SystemVStructClassificator does reject Int128 via
+    // Int128FieldLayoutAlgorithm.IsIntegerType, which diverges from the
+    // runtime; we mirror the runtime so our GCRefMap matches ComputeCallRefMap.
     private static bool IsRejectedIntrinsic(Target target, TypeHandle typeHandle)
-        => target.Contracts.RuntimeTypeSystem.GetIntrinsicKind(typeHandle) != IntrinsicTypeKind.None;
+    {
+        IntrinsicTypeKind kind = target.Contracts.RuntimeTypeSystem.GetIntrinsicKind(typeHandle);
+        return kind is IntrinsicTypeKind.Vector64
+            or IntrinsicTypeKind.Vector128
+            or IntrinsicTypeKind.Vector256
+            or IntrinsicTypeKind.Vector512
+            or IntrinsicTypeKind.NumericsVector;
+    }
 
     // Maps a field's CorElementType to a SystemV classification. Struct means
     // "recurse into the value type's fields".

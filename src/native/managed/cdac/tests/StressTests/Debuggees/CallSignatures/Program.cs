@@ -571,8 +571,8 @@ internal static unsafe class Program
 
         SysVThreeRefs(default);         // 24 bytes -> stack
         SysVVector128Arg(default);      // intrinsic Vector -> stack
-        SysVInt128Arg(default);         // Int128 -> stack
-        SysVEmpty(default);             // empty struct -- passedInRegisters=true with 0 eightbytes
+        SysVInt128Arg(default);         // 2 Integer eightbytes (runtime does NOT reject Int128 by name)
+        SysVEmpty(default);             // 1-byte empty struct -> 1 Integer eightbyte (padding is normalized to Integer)
 
         // Unions (LayoutKind.Explicit with overlapping fields). Exercises
         // the ReClassifyField merge path in the classifier. C# rules forbid
