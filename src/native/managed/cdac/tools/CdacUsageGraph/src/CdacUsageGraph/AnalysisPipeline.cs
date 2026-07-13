@@ -6,7 +6,6 @@ using CdacUsageGraph.Compilation;
 using CdacUsageGraph.Discovery;
 using CdacUsageGraph.Model;
 using CdacUsageGraph.Reporting;
-using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
 namespace CdacUsageGraph;
@@ -29,23 +28,22 @@ public sealed class AnalysisPipeline
 
     public AnalysisPipeline(AnalysisOptions options) => _options = options;
 
-    public int Run()
+    /// <summary>
+    /// Builds the usage graph for the cDAC source rooted at <paramref name="cdacRoot"/> (phases A-D).
+    /// Shared by the report pipeline, the <c>docs</c> command and the tests so they all analyze the
+    /// same way.
+    /// </summary>
+    public static UsageGraph BuildGraph(string cdacRoot)
     {
-        string cdacRoot = _options.CdacRoot.FullName;
         if (!Directory.Exists(Path.Combine(cdacRoot, "Microsoft.Diagnostics.DataContractReader.Contracts")))
             throw new InvalidOperationException($"Could not find the cDAC Contracts project under '{cdacRoot}'; pass --cdac-root.");
 
         // Phase A: compilation.
         CSharpCompilation compilation = new CdacCompilationLoader().Load(cdacRoot);
-        int errCount = compilation.GetDiagnostics().Count(d => d.Severity == DiagnosticSeverity.Error);
-        Console.WriteLine($"Parsed {compilation.SyntaxTrees.Length} files. Compilation errors (expected, non-fatal): {errCount}");
 
         // Phase B: discovery.
         DataTypeIndex index = DataTypeIndex.Build(compilation);
-        Console.WriteLine($"Discovered {index.Count} Data types.");
-
         IReadOnlyList<ContractRegistration> registrations = ContractRegistrationParser.Parse(compilation);
-        Console.WriteLine($"Parsed {registrations.Count} contract registrations.");
 
         // Sanity guard: if discovery found no Data types or no registrations, the compilation
         // input has drifted (renamed anchor types, missing source) -- fail fast rather than emit
@@ -58,7 +56,17 @@ public sealed class AnalysisPipeline
         TypeInfoCorrelator correlator = TypeInfoCorrelator.Build(compilation);
 
         // Phase C/D: forward interprocedural walk.
-        UsageGraph graph = new UsageWalker(compilation, index, correlator).Walk(registrations, cdacRoot);
+        return new UsageWalker(compilation, index, correlator).Walk(registrations, cdacRoot);
+    }
+
+    public int Run()
+    {
+        string cdacRoot = _options.CdacRoot.FullName;
+
+        // Phases A-D.
+        UsageGraph graph = BuildGraph(cdacRoot);
+        Console.WriteLine($"Discovered {graph.DataTypeCount} Data types.");
+        Console.WriteLine($"Parsed {graph.Registrations.Count} contract registrations.");
 
         // Phase E: emit.
         string outDir = _options.OutputDirectory.FullName;

@@ -10,8 +10,9 @@ which of their `[Field]` descriptor fields the contract implementation uses.
 ## What it does
 
 1. Builds a `CSharpCompilation` over the cDAC `Abstractions` + `Contracts` source
-   (no MSBuild/Arcade restore required; the source-generated `IData<T>.Create`
-   factories are not needed to analyze usage).
+   (analyzing the source directly -- the cDAC projects don't need to be compiled first,
+   and the source-generated `IData<T>.Create` factories are not needed to analyze usage;
+   reference assemblies come from the tool's own runtime).
 2. Parses `CoreCLRContracts.Register` to map `(interface, version) -> impl type`.
 3. Discovers `Data.*` types (`[CdacType]` / `IData<T>`) and their
    `[Field]`/`[FieldAddress]` properties.
@@ -39,22 +40,30 @@ which of their `[Field]` descriptor fields the contract implementation uses.
 
 ## Build & run
 
-Requires a .NET SDK that can target `net8.0` (the tool is isolated from the
-runtime's Arcade build via the local `Directory.Build.props/.targets` and
-`Directory.Packages.props`).
+The tool is part of the runtime's Arcade build (subset `tools.cdactests`), targeting
+`$(NetCoreAppToolCurrent)` and using the repo-central Roslyn / `System.CommandLine`
+versions. Build/test it with the repo build:
+
+```bash
+./build.sh -s tools.cdac+tools.cdactests -c Debug -test     # build.cmd on Windows
+```
+
+For a quick local run of the analysis (using the repo SDK under `.dotnet`):
 
 ```powershell
-# from this folder (the solution root)
-dotnet run --project src/CdacUsageGraph -c Release
+dotnet run --project src/CdacUsageGraph -c Debug
 ```
 
 Optional arguments: `--cdac-root <dir>` (the cDAC source root; auto-detected if
 omitted) and `--output <dir>` (defaults to this folder's `output/`).
 
+The tool also has a `docs` sub-command that fills the generated marker blocks in
+`docs/design/datacontracts/*.md` (see below).
+
 ### Project layout
 
 ```
-CdacUsageGraph/                        # solution root (isolated from the Arcade build)
+CdacUsageGraph/                        # tool root (part of the Arcade build)
 ├── CdacUsageGraph.slnx
 ├── src/
 │   └── CdacUsageGraph/                # the tool (Exe): thin Program.cs + all analysis logic
@@ -63,9 +72,10 @@ CdacUsageGraph/                        # solution root (isolated from the Arcade
 │       ├── Discovery/                 # DataTypeIndex, ContractRegistrationParser, TypeInfoCorrelator (phase B)
 │       ├── Analysis/                  # UsageWalker (OperationWalker), UsageCollector, OperationInspector (phase C/D)
 │       ├── Model/                     # UsageGraph, RegistrationInfo (immutable result)
-│       └── Reporting/                 # IReportWriter + Markdown/JSON writers (phase E)
+│       ├── Reporting/                 # IReportWriter + Markdown/JSON writers (phase E)
+│       └── Docs/                      # DocGenerator + DocDescriptorMeanings (fills the docs marker blocks)
 └── tests/
-    └── CdacUsageGraph.Tests/          # xUnit: in-memory-compilation + end-to-end tests
+    └── CdacUsageGraph.Tests/          # xUnit: in-memory-compilation, end-to-end, and doc-drift tests
 ```
 
 The analysis logic lives in the single `CdacUsageGraph` project (folders are namespaces); the
@@ -83,8 +93,14 @@ test project references it via `<ProjectReference>` + `InternalsVisibleTo`.
 ### Tests
 
 ```powershell
-dotnet test tests/CdacUsageGraph.Tests -c Release
+dotnet test tests/CdacUsageGraph.Tests -c Debug
 ```
+
+Included tests cover discovery, the end-to-end walk against the real cDAC source, and the
+**doc-drift gate** (`DocsAreUpToDateTests`) which asserts the generated marker blocks in
+`docs/design/datacontracts/*.md` are up to date. Because the test project is in the
+`tools.cdactests` subset, this gate runs in the `CdacUnitTests` CI leg on every PR that
+touches `src/native/managed/cdac/**`.
 
 ### Compare against the docs
 
@@ -97,20 +113,19 @@ Writes `./output/doc-comparison.md` with type-level and field-level diffs
 `GCHeapSVR`=`GCHeap`, trailing `_<version>` stripped, and field names compared
 without `m_`/`_` prefixes), so only genuine drift is surfaced.
 
-### Running as a CI drift gate
+### Generating / checking the docs
 
-The tool is isolated from the Arcade build, so nothing builds or restores it in the normal
-runtime build; the drift gate must restore + run it explicitly. It depends only on in-feed
-packages (Roslyn, `Basic.Reference.Assemblies`, `System.CommandLine`), which restore during
-`dotnet build`. A self-contained gate is:
+The `docs` sub-command (and its thin `generate-docs.ps1` wrapper) fills the generated marker
+blocks from the analysis, merging in `data-descriptor-meanings.json`:
 
 ```powershell
-dotnet build  src/native/managed/cdac/tools/CdacUsageGraph/CdacUsageGraph.slnx -c Release
-dotnet run    --project src/native/managed/cdac/tools/CdacUsageGraph/src/CdacUsageGraph -c Release
-pwsh          src/native/managed/cdac/tools/CdacUsageGraph/generate-docs.ps1 -Check   # fails on drift
+pwsh ./generate-docs.ps1           # rewrite marked blocks in place
+pwsh ./generate-docs.ps1 -Check    # fail on drift (same logic as the CI unit test)
 ```
 
-The loader derives its source list (including the coreclr tool files linked via
+The generation logic lives in `Docs/DocGenerator.cs` so the CI unit test and the manual
+regen use one implementation. The loader derives its source list (including the coreclr tool
+files linked via
 `<Compile Include>`) directly from the cDAC `.csproj`s and **fails fast** if a referenced linked
 file is missing or if discovery finds no Data types / registrations -- so a broken or drifted
 compilation input surfaces as an error rather than a silently under-reported graph.

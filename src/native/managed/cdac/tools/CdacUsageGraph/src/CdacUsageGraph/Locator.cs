@@ -34,4 +34,12 @@ public static class Locator
         }
         return new DirectoryInfo(Path.Combine(Directory.GetCurrentDirectory(), "output"));
     }
+
+    /// <summary>The datacontracts docs directory (<c>docs/design/datacontracts</c>) relative to the cDAC root.</summary>
+    public static DirectoryInfo DocsDirectory(DirectoryInfo cdacRoot) =>
+        new(Path.GetFullPath(Path.Combine(cdacRoot.FullName, "..", "..", "..", "..", "docs", "design", "datacontracts")));
+
+    /// <summary>The data-descriptor meanings sidecar next to the datacontracts docs.</summary>
+    public static FileInfo MeaningsFile(DirectoryInfo cdacRoot) =>
+        new(Path.Combine(DocsDirectory(cdacRoot).FullName, "data-descriptor-meanings.json"));
 }

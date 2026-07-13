@@ -9,6 +9,8 @@ namespace CdacUsageGraph.Reporting;
 /// <summary>Emits <c>contract-usage.json</c>: the full machine-readable usage graph.</summary>
 public sealed class JsonReportWriter : IReportWriter
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+
     // Named model (rather than an anonymous type) so every local can be explicitly typed. Property
     // names are the serialized JSON keys; declaration order is the emitted key order. dataTypes is
     // derived from the fieldUsage keys and kept for convenience of consumers.
@@ -51,7 +53,7 @@ public sealed class JsonReportWriter : IReportWriter
 
         File.WriteAllText(
             Path.Combine(outputDirectory, "contract-usage.json"),
-            JsonSerializer.Serialize(jsonModel, new JsonSerializerOptions { WriteIndented = true }));
+            JsonSerializer.Serialize(jsonModel, s_jsonOptions));
         return "contract-usage.json";
     }
 }

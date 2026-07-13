@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Xml.Linq;
-using Basic.Reference.Assemblies;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -77,11 +76,28 @@ public sealed class CdacCompilationLoader
         return CSharpCompilation.Create(
             "CdacUsageAnalysis",
             trees,
-            Net90.References.All,
+            GetRuntimeReferences(),
             new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,
                 allowUnsafe: true,
                 nullableContextOptions: NullableContextOptions.Enable));
+    }
+
+    // Reference assemblies for the compilation: the trusted-platform-assembly set of the runtime
+    // the tool is executing on ($(NetCoreAppToolCurrent)). This is a superset of what the cDAC
+    // source needs (System.*), so the semantic model resolves BCL types without pulling in the
+    // separate Basic.Reference.Assemblies package. The source-generated IData<T>.Create factories
+    // are still absent, so a handful of compile errors remain expected and non-fatal.
+    private static IEnumerable<MetadataReference> GetRuntimeReferences()
+    {
+        if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is not string tpa)
+            throw new InvalidOperationException("Could not enumerate runtime reference assemblies (TRUSTED_PLATFORM_ASSEMBLIES).");
+
+        foreach (string path in tpa.Split(Path.PathSeparator))
+        {
+            if (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+                yield return MetadataReference.CreateFromFile(path);
+        }
     }
 
     // Explicit single-file <Compile Include="..."/> items from a .csproj (SDK-style projects only

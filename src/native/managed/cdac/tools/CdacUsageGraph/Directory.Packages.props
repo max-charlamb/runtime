@@ -1,7 +1,0 @@
-<!-- Opt out of the repo's Central Package Management so this tool can pin its
-     own package versions inline. NuGet stops at the first Directory.Packages.props. -->
-<Project>
-  <PropertyGroup>
-    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
-  </PropertyGroup>
-</Project>

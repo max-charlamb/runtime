@@ -233,7 +233,7 @@ public sealed class UsageWalker
     // ---- interprocedural machinery ---------------------------------------------------------
 
     // Transitive type-parameter resolution through a substitution map.
-    private ITypeSymbol Resolve(ITypeSymbol t, Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
+    private static ITypeSymbol Resolve(ITypeSymbol t, Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
     {
         int guard = 0;
         while (t is ITypeParameterSymbol tp && subst.TryGetValue(tp, out ITypeSymbol? mapped) && guard++ < 16)

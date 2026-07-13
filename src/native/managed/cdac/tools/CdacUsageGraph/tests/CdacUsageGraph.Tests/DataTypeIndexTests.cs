@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Basic.Reference.Assemblies;
 using CdacUsageGraph.Discovery;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -47,12 +46,22 @@ public sealed class DataTypeIndexTests
         CSharpCompilation compilation = CSharpCompilation.Create(
             "DataTypeIndexTest",
             [CSharpSyntaxTree.ParseText(Source)],
-            Net90.References.All,
+            RuntimeReferences(),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         INamedTypeSymbol? widget = compilation.GetTypeByMetadataName("Microsoft.Diagnostics.DataContractReader.Data.Widget");
         Assert.NotNull(widget);
         return (compilation, widget!);
+    }
+
+    private static IEnumerable<MetadataReference> RuntimeReferences()
+    {
+        string tpa = (string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!;
+        foreach (string path in tpa.Split(Path.PathSeparator))
+        {
+            if (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+                yield return MetadataReference.CreateFromFile(path);
+        }
     }
 
     [Fact]
