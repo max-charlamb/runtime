@@ -1,0 +1,3 @@
+<!-- Isolate this tool from the repo's Arcade Directory.Build.targets. -->
+<Project>
+</Project>

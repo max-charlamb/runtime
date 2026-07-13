@@ -100,67 +100,74 @@ The contract depends on the following globals
 
 The contract additionally depends on these data descriptors
 
+<!-- BEGIN GENERATED: data-descriptors contract=Thread version=c1 -->
 | Data Descriptor Name | Field | Meaning |
 | --- | --- | --- |
-| `Exception` | `WatsonBuckets` | Pointer to exception Watson buckets |
-| `ExceptionInfo` | `PreviousNestedInfo` | Pointer to previous nested exception info |
-| `ExceptionInfo` | `ThrownObjectHandle` | Pointer to exception object handle |
-| `ExceptionInfo` | `ExceptionWatsonBucketTrackerBuckets` | Pointer to Watson unhandled buckets on non-Unix |
-| `ExceptionInfo` | `ExceptionRecord` | Pointer to the OS `EXCEPTION_RECORD` the OS dispatcher pushed for this exception |
+| `EEAllocContext` | `GCAllocationContext` | Embedded GC allocation context for the thread |
+| `Exception` | `_watsonBuckets` | Pointer to exception Watson buckets |
 | `ExceptionInfo` | `ContextRecord` | Pointer to the OS `CONTEXT` the OS dispatcher pushed for this exception |
-| `GCAllocContext` | `Pointer` | GC allocation pointer |
-| `GCAllocContext` | `Limit` | Allocation limit pointer |
+| `ExceptionInfo` | `ExceptionFlags` | Exception state flags |
+| `ExceptionInfo` | `ExceptionRecord` | Pointer to the OS `EXCEPTION_RECORD` the OS dispatcher pushed for this exception |
+| `ExceptionInfo` | `ExceptionWatsonBucketTrackerBuckets` | Pointer to Watson unhandled buckets on non-Unix |
+| `ExceptionInfo` | `PreviousNestedInfo` | Pointer to previous nested exception info |
+| `ExceptionInfo` | `ThrownObject` | Handle to the thrown exception object |
 | `GCAllocContext` | `AllocBytes` | Number of bytes allocated on SOH by this context |
 | `GCAllocContext` | `AllocBytesLoh` | Number of bytes allocated not on SOH by this context |
+| `GCAllocContext` | `Limit` | Allocation limit pointer |
+| `GCAllocContext` | `Pointer` | GC allocation pointer |
 | `IdDispenser` | `HighestId` | Highest possible small thread ID |
 | `IdDispenser` | `IdToThread` | Array mapping small thread IDs to thread pointers |
 | `InflightTLSData` | `Next` | Pointer to next in-flight TLS data entry |
-| `InflightTLSData` | `TlsIndex` | TLS index for the in-flight static field |
 | `InflightTLSData` | `TLSData` | Object handle to the TLS data for the static field |
+| `InflightTLSData` | `TlsIndex` | TLS index for the in-flight static field |
+| `ObjectHandle` | `Handle` | Address of the object handle |
 | `ObjectHandle` | `Object` | Pointer to the managed object |
 | `RuntimeThreadLocals` | `AllocContext` | GC allocation context for the thread |
+| `Thread` | `CachedStackBase` | Pointer to the base of the stack |
+| `Thread` | `CachedStackLimit` | Pointer to the limit of the stack |
+| `Thread` | `CurrentCustomDebuggerNotification` | Handle to the current custom debugger notification object |
+| `Thread` | `DebuggerControlledThreadState` | Thread state flags controlled by the debugger |
+| `Thread` | `DebuggerFilterContext` | Pointer to the debugger filter context for the thread |
+| `Thread` | `ExceptionTracker` | Pointer to exception tracking information |
+| `Thread` | `ExposedObject` | Handle to the managed `Thread` object exposed to the debugger |
+| `Thread` | `Frame` | Pointer to current frame |
+| `Thread` | `GCFrame` | Pointer to the head of the thread's GCFrame chain. |
+| `Thread` | `Id` | Thread identifier |
+| `Thread` | `InteropDebuggingHijacked` | Whether the thread has been hijacked for interop debugging |
+| `Thread` | `LastThrownObject` | Handle to last thrown exception object |
+| `Thread` | `LastThrownObjectIsUnhandled` | Whether `LastThrownObject` should be treated as unhandled |
+| `Thread` | `LinkNext` | Pointer to get next thread |
+| `Thread` | `OSId` | Operating system thread identifier |
+| `Thread` | `PreemptiveGCDisabled` | Flag indicating if preemptive GC is disabled |
+| `Thread` | `RuntimeThreadLocals` | Pointer to some thread-local storage |
+| `Thread` | `State` | Thread state flags |
+| `Thread` | `ThreadHandle` | OS thread handle (optional, Windows only; readers should expect `TargetPointer.Null` on non-Windows targets) |
+| `Thread` | `ThreadLocalDataPtr` | Pointer to thread local data structure |
+| `Thread` | `UEWatsonBucketTrackerBuckets` | Pointer to thread Watson buckets data (optional, Windows only) |
+| `ThreadLocalData` | `CollectibleTlsArrayData` | Pointer to collectible TLS array data |
+| `ThreadLocalData` | `CollectibleTlsDataCount` | Count of collectible TLS data entries |
+| `ThreadLocalData` | `InFlightData` | Pointer to in-flight TLS data for fields being initialized |
+| `ThreadLocalData` | `NonCollectibleTlsArrayData` | Pointer to non-collectible TLS array data |
+| `ThreadLocalData` | `NonCollectibleTlsDataCount` | Count of non-collectible TLS data entries |
+| `ThreadStore` | `BackgroundCount` | Number of background threads |
+| `ThreadStore` | `DeadCount` | Number of dead threads |
+| `ThreadStore` | `FirstThreadLink` | Pointer to first thread in the linked list |
+| `ThreadStore` | `PendingCount` | Number of pending threads |
+| `ThreadStore` | `ThreadCount` | Number of threads |
+| `ThreadStore` | `UnstartedCount` | Number of unstarted threads |
 | `TLSIndex` | `IndexOffset` | Offset index for thread local storage |
 | `TLSIndex` | `IndexType` | Type of thread local storage index |
 | `TLSIndex` | `IsAllocated` | Whether TLS storage has been allocated |
 | `TLSIndex` | `TLSIndexRawIndex` | Raw index value containing type and offset |
-| `Thread` | `Id` | Thread identifier |
-| `Thread` | `OSId` | Operating system thread identifier |
-| `Thread` | `State` | Thread state flags |
-| `Thread` | `DebuggerControlledThreadState` | Thread state flags controlled by the debugger |
-| `Thread` | `PreemptiveGCDisabled` | Flag indicating if preemptive GC is disabled |
-| `Thread` | `Frame` | Pointer to current frame |
-| `Thread` | `GCFrame` | Pointer to the head of the thread's GCFrame chain. |
-| `Thread` | `CachedStackBase` | Pointer to the base of the stack |
-| `Thread` | `CachedStackLimit` | Pointer to the limit of the stack |
-| `Thread` | `ExposedObject` | Handle to the managed `Thread` object exposed to the debugger |
-| `Thread` | `LastThrownObject` | Handle to last thrown exception object |
-| `Thread` | `LastThrownObjectIsUnhandled` | Whether `LastThrownObject` should be treated as unhandled |
-| `Thread` | `CurrentCustomDebuggerNotification` | Handle to the current custom debugger notification object |
-| `Thread` | `LinkNext` | Pointer to get next thread |
-| `Thread` | `ExceptionTracker` | Pointer to exception tracking information |
-| `Thread` | `DebuggerFilterContext` | Pointer to the debugger filter context for the thread |
-| `Thread` | `InteropDebuggingHijacked` | Whether the thread has been hijacked for interop debugging |
-| `Thread` | `RuntimeThreadLocals` | Pointer to some thread-local storage |
-| `Thread` | `ThreadLocalDataPtr` | Pointer to thread local data structure |
-| `Thread` | `ThreadHandle` | OS thread handle (optional, Windows only; readers should expect `TargetPointer.Null` on non-Windows targets) |
-| `Thread` | `UEWatsonBucketTrackerBuckets` | Pointer to thread Watson buckets data (optional, Windows only) |
-| `ThreadLocalData` | `NonCollectibleTlsData` | Count of non-collectible TLS data entries |
-| `ThreadLocalData` | `NonCollectibleTlsArrayData` | Pointer to non-collectible TLS array data |
-| `ThreadLocalData` | `CollectibleTlsData` | Count of collectible TLS data entries |
-| `ThreadLocalData` | `CollectibleTlsArrayData` | Pointer to collectible TLS array data |
-| `ThreadLocalData` | `InFlightData` | Pointer to in-flight TLS data for fields being initialized |
-| `ThreadStore` | `ThreadCount` | Number of threads |
-| `ThreadStore` | `FirstThreadLink` | Pointer to first thread in the linked list |
-| `ThreadStore` | `UnstartedCount` | Number of unstarted threads |
-| `ThreadStore` | `BackgroundCount` | Number of background threads |
-| `ThreadStore` | `PendingCount` | Number of pending threads |
-| `ThreadStore` | `DeadCount` | Number of dead threads |
+<!-- END GENERATED: data-descriptors contract=Thread version=c1 -->
 
 The contract depends on the following other contracts
 
-| Contract |
+<!-- BEGIN GENERATED: contracts-used contract=Thread version=c1 -->
+| Contract Name |
 | --- |
-| Object |
+| `Object` |
+<!-- END GENERATED: contracts-used contract=Thread version=c1 -->
 
 ``` csharp
 enum TLSIndexType
