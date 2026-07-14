@@ -59,7 +59,10 @@ public sealed class DocDescriptorMeanings
                 default:
                     Dictionary<string, string> byKey = new(StringComparer.Ordinal);
                     foreach (JsonProperty entry in top.Value.EnumerateObject())
+                    {
+                        ValidateDescriptorKey(entry.Name, $"meaning entry for contract '{top.Name}'");
                         byKey[entry.Name] = entry.Value.GetString() ?? string.Empty;
+                    }
                     meanings[top.Name] = byKey;
                     break;
             }
@@ -88,9 +91,19 @@ public sealed class DocDescriptorMeanings
             foreach (JsonElement v in p.Value.EnumerateArray())
             {
                 if (v.GetString() is string s)
+                {
+                    ValidateDescriptorKey(s, $"'{p.Name}' override");
                     list.Add(s);
+                }
             }
             into[p.Name] = list;
         }
+    }
+
+    private static void ValidateDescriptorKey(string key, string context)
+    {
+        int dot = key.IndexOf('.', StringComparison.Ordinal);
+        if (dot <= 0 || dot == key.Length - 1)
+            throw new JsonException($"Invalid data-descriptor key '{key}' in {context}; expected 'Type.Field'.");
     }
 }

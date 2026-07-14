@@ -36,4 +36,49 @@ public sealed class DocsAreUpToDateTests
             $"The generated data-descriptor doc blocks are out of date for: {string.Join(", ", drifted)}. " +
             "Run 'CdacUsageGraph docs' (or generate-docs.ps1) and commit the result.");
     }
+
+    [Theory]
+    [InlineData("<!-- BEGIN GENERATED: data-descriptors contract=Thread version=c1 -->")]
+    [InlineData(
+        "<!-- BEGIN GENERATED: unknown contract=Thread version=c1 -->\n" +
+        "<!-- END GENERATED: unknown contract=Thread version=c1 -->")]
+    [InlineData(
+        "<!-- BEGIN GENERATED: contracts-used contract=Thread version=c1 -->\n" +
+        "<!-- END GENERATED: contracts-used contract=Thread version=c1 -->\n" +
+        "<!-- BEGIN GENERATED: contracts-used contract=Thread version=c1 -->\n" +
+        "<!-- END GENERATED: contracts-used contract=Thread version=c1 -->")]
+    public void RejectsInvalidGeneratedMarkers(string content)
+    {
+        using TempDirectory temp = new();
+        File.WriteAllText(Path.Combine(temp.Path, "Thread.md"), content);
+        DocGenerator generator = new(EmptyGraph(), DocDescriptorMeanings.Empty);
+
+        Assert.Throws<InvalidOperationException>(() => generator.Check(temp.Path));
+    }
+
+    [Fact]
+    public void RejectsMalformedDescriptorOverrideKey()
+    {
+        using TempDirectory temp = new();
+        string path = Path.Combine(temp.Path, "meanings.json");
+        File.WriteAllText(path, """{ "_supplement": { "Thread": ["MissingDot"] } }""");
+
+        Assert.Throws<System.Text.Json.JsonException>(() => DocDescriptorMeanings.Load(path));
+    }
+
+    private static UsageGraph EmptyGraph() => new(
+        "",
+        0,
+        [],
+        new Dictionary<(ContractLabel, string), IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>>(),
+        new Dictionary<ContractLabel, IReadOnlyCollection<string>>());
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public TempDirectory() => Path = Directory.CreateTempSubdirectory("CdacUsageGraphTests").FullName;
+
+        public string Path { get; }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
 }

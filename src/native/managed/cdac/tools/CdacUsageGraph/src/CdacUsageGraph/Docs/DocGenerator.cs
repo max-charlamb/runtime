@@ -59,14 +59,15 @@ public sealed partial class DocGenerator
         foreach (FileInfo md in new DirectoryInfo(docsDir).EnumerateFiles("*.md").OrderBy(f => f.Name, StringComparer.Ordinal))
         {
             string text = File.ReadAllText(md.FullName);
-            if (text.Contains("BEGIN GENERATED: data-descriptors", StringComparison.Ordinal) ||
-                text.Contains("BEGIN GENERATED: contracts-used", StringComparison.Ordinal))
+            if (text.Contains("BEGIN GENERATED:", StringComparison.Ordinal) ||
+                text.Contains("END GENERATED:", StringComparison.Ordinal))
                 yield return md;
         }
     }
 
     private string Rewrite(string text)
     {
+        ValidateMarkers(text);
         string newline = text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
         return MarkerRegex().Replace(text, m =>
         {
@@ -83,6 +84,37 @@ public sealed partial class DocGenerator
             };
             return string.Join(newline, new[] { begin }.Concat(table).Append(end));
         });
+    }
+
+    private static void ValidateMarkers(string text)
+    {
+        MatchCollection begins = BeginMarkerRegex().Matches(text);
+        MatchCollection ends = EndMarkerRegex().Matches(text);
+        MatchCollection blocks = MarkerRegex().Matches(text);
+        if (begins.Count != blocks.Count || ends.Count != blocks.Count)
+        {
+            throw new InvalidOperationException(
+                $"Malformed generated-doc markers: found {begins.Count} BEGIN marker(s), " +
+                $"{ends.Count} END marker(s), and {blocks.Count} complete block(s).");
+        }
+
+        HashSet<(string Kind, string Contract, string Version)> seen = new();
+        foreach (Match block in blocks)
+        {
+            string kind = block.Groups["kind"].Value;
+            if (kind is not ("data-descriptors" or "contracts-used"))
+                throw new InvalidOperationException($"Unknown generated-doc marker kind '{kind}'.");
+
+            (string, string, string) key = (
+                kind,
+                block.Groups["c"].Value,
+                block.Groups["v"].Value);
+            if (!seen.Add(key))
+            {
+                throw new InvalidOperationException(
+                    $"Duplicate generated-doc block: kind={key.Item1}, contract={key.Item2}, version={key.Item3}.");
+            }
+        }
     }
 
     private List<string> BuildDataDescriptors(string contractShort, string version)
@@ -140,4 +172,10 @@ public sealed partial class DocGenerator
 
     [GeneratedRegex(@"<!-- BEGIN GENERATED: (?<kind>[\w-]+) contract=(?<c>\w+) version=(?<v>\w+) -->.*?<!-- END GENERATED: \k<kind> contract=\k<c> version=\k<v> -->", RegexOptions.Singleline)]
     private static partial Regex MarkerRegex();
+
+    [GeneratedRegex(@"<!-- BEGIN GENERATED: (?<kind>[\w-]+) contract=(?<c>\w+) version=(?<v>\w+) -->")]
+    private static partial Regex BeginMarkerRegex();
+
+    [GeneratedRegex(@"<!-- END GENERATED: (?<kind>[\w-]+) contract=(?<c>\w+) version=(?<v>\w+) -->")]
+    private static partial Regex EndMarkerRegex();
 }
