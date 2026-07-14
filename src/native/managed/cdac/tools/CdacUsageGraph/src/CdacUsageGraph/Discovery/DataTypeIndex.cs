@@ -11,7 +11,7 @@ namespace CdacUsageGraph.Discovery;
 /// which types are <c>[CdacType]</c>/<c>IData&lt;T&gt;</c>, each descriptor field's native name,
 /// and the map from descriptor name to Data class (for <c>Fields["..."]</c> correlation).
 /// </summary>
-public sealed class DataTypeIndex
+internal sealed class DataTypeIndex
 {
     private const string CdacTypeAttr = "Microsoft.Diagnostics.DataContractReader.CdacTypeAttribute";
     private const string FieldAttr = "Microsoft.Diagnostics.DataContractReader.FieldAttribute";

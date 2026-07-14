@@ -8,7 +8,7 @@ using CdacUsageGraph.Model;
 namespace CdacUsageGraph;
 
 /// <summary>Defines the command-line surface. Kept separate so it can be unit-tested.</summary>
-public static class Commands
+internal static class Commands
 {
     public static RootCommand Create()
     {

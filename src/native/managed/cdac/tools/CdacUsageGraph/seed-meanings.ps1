@@ -6,9 +6,9 @@
 param(
     [Parameter(Mandatory)][string]$Contract,       # e.g. Thread
     [string]$Version = "c1",
-    [string]$DocsDir = (Join-Path $PSScriptRoot "..\..\..\..\..\..\docs\design\datacontracts"),
-    [string]$Json    = (Join-Path $PSScriptRoot "output\contract-usage.json"),
-    [string]$Out     = (Join-Path $PSScriptRoot "..\..\..\..\..\..\docs\design\datacontracts\data-descriptor-meanings.json")
+    [string]$DocsDir = (Join-Path $PSScriptRoot "../../../../../../docs/design/datacontracts"),
+    [string]$Json    = (Join-Path $PSScriptRoot "output/contract-usage.json"),
+    [string]$Out     = (Join-Path $PSScriptRoot "../../../../../../docs/design/datacontracts/data-descriptor-meanings.json")
 )
 
 function NormKey($type, $field) {

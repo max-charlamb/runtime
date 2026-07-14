@@ -20,7 +20,7 @@ internal static class ReportQueries
 }
 
 /// <summary>Emits <c>contract-data-graph.md</c>: (contract, version) -&gt; Data types used.</summary>
-public sealed class DataGraphMarkdownWriter : IReportWriter
+internal sealed class DataGraphMarkdownWriter : IReportWriter
 {
     public string Write(UsageGraph graph, string outputDirectory)
     {
@@ -45,7 +45,7 @@ public sealed class DataGraphMarkdownWriter : IReportWriter
 }
 
 /// <summary>Emits <c>contract-field-usage.md</c>: (contract, version, Data type, field) -&gt; usage kind.</summary>
-public sealed class FieldUsageMarkdownWriter : IReportWriter
+internal sealed class FieldUsageMarkdownWriter : IReportWriter
 {
     public string Write(UsageGraph graph, string outputDirectory)
     {
@@ -75,7 +75,7 @@ public sealed class FieldUsageMarkdownWriter : IReportWriter
 }
 
 /// <summary>Emits <c>contract-contracts-used.md</c>: (contract, version) -&gt; other contracts used.</summary>
-public sealed class ContractsUsedMarkdownWriter : IReportWriter
+internal sealed class ContractsUsedMarkdownWriter : IReportWriter
 {
     public string Write(UsageGraph graph, string outputDirectory)
     {

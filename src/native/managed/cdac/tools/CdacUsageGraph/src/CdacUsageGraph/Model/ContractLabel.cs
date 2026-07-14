@@ -8,4 +8,4 @@ namespace CdacUsageGraph.Model;
 /// <c>IThread</c>) and its version string (e.g. <c>c1</c>). Used as the label threaded through the
 /// walk and as the key of the result dictionaries -- named fields avoid positional mistakes.
 /// </summary>
-public readonly record struct ContractLabel(string Contract, string Version);
+internal readonly record struct ContractLabel(string Contract, string Version);

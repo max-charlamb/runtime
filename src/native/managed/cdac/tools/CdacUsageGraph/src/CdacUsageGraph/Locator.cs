@@ -4,7 +4,7 @@
 namespace CdacUsageGraph;
 
 /// <summary>Locates the cDAC source root and the tool's output directory relative to the binary.</summary>
-public static class Locator
+internal static class Locator
 {
     /// <summary>
     /// Finds <c>src/native/managed/cdac</c> by walking up from <paramref name="start"/>

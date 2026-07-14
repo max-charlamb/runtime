@@ -7,7 +7,7 @@ using CdacUsageGraph.Model;
 namespace CdacUsageGraph.Reporting;
 
 /// <summary>Emits <c>contract-usage.json</c>: the full machine-readable usage graph.</summary>
-public sealed class JsonReportWriter : IReportWriter
+internal sealed class JsonReportWriter : IReportWriter
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
@@ -17,7 +17,7 @@ public sealed class JsonReportWriter : IReportWriter
     private sealed record ContractUsageJson(
         string contract,
         string version,
-        string impl,
+        string[] impls,
         string[] dataTypes,
         string[] contractsUsed,
         Dictionary<string, Dictionary<string, string[]>> fieldUsage);
@@ -25,11 +25,11 @@ public sealed class JsonReportWriter : IReportWriter
     public string Write(UsageGraph graph, string outputDirectory)
     {
         List<ContractUsageJson> jsonModel = graph.Registrations
-            .GroupBy(r => (r.Contract, r.Version)).Select(g => g.First())
-            .OrderBy(r => r.Contract).ThenBy(r => r.Version)
-            .Select(r =>
+            .GroupBy(r => (r.Contract, r.Version))
+            .OrderBy(g => g.Key.Contract).ThenBy(g => g.Key.Version)
+            .Select(g =>
             {
-                ContractLabel label = new ContractLabel(r.Contract, r.Version);
+                ContractLabel label = new ContractLabel(g.Key.Contract, g.Key.Version);
                 graph.ContractsUsed.TryGetValue(label, out IReadOnlyCollection<string>? cset);
                 Dictionary<string, Dictionary<string, string[]>> fields = graph.FieldUsage
                     .Where(k => k.Key.Label == label)
@@ -42,9 +42,10 @@ public sealed class JsonReportWriter : IReportWriter
                                 x => x.Key,
                                 x => x.Value.Select(u => u.ToString()).OrderBy(s => s, StringComparer.Ordinal).ToArray()));
                 return new ContractUsageJson(
-                    r.Contract,
-                    r.Version,
-                    r.Impl,
+                    g.Key.Contract,
+                    g.Key.Version,
+                    g.Select(r => r.Impl).Distinct(StringComparer.Ordinal)
+                        .OrderBy(x => x, StringComparer.Ordinal).ToArray(),
                     ReportQueries.DataTypesUsed(graph, label).ToArray(),
                     (cset ?? Array.Empty<string>()).OrderBy(x => x, StringComparer.Ordinal).ToArray(),
                     fields);

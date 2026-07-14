@@ -15,7 +15,7 @@ namespace CdacUsageGraph.Analysis;
 /// through callees, constructed helpers, base/generic-base classes and static-abstract dispatch,
 /// and collects per-field usage into an immutable <see cref="UsageGraph"/>.
 /// </summary>
-public sealed class UsageWalker
+internal sealed class UsageWalker
 {
     private readonly Microsoft.CodeAnalysis.Compilation _compilation;
     private readonly DataTypeIndex _index;

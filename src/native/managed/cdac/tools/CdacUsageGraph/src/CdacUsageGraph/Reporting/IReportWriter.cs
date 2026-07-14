@@ -6,7 +6,7 @@ using CdacUsageGraph.Model;
 namespace CdacUsageGraph.Reporting;
 
 /// <summary>Phase E: writes one report artifact from the <see cref="UsageGraph"/>.</summary>
-public interface IReportWriter
+internal interface IReportWriter
 {
     /// <summary>Writes the report to <paramref name="outputDirectory"/> and returns a one-line summary.</summary>
     string Write(UsageGraph graph, string outputDirectory);

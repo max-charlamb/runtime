@@ -4,6 +4,6 @@
 namespace CdacUsageGraph;
 
 /// <summary>Parsed, validated command-line arguments for one analysis run.</summary>
-public sealed record AnalysisOptions(
+internal sealed record AnalysisOptions(
     DirectoryInfo CdacRoot,
     DirectoryInfo OutputDirectory);

@@ -12,7 +12,7 @@ namespace CdacUsageGraph.Discovery;
 /// a later <c>typeInfo.Fields["nativeName"]</c> raw-string lookup can be attributed to a Data type.
 /// Records every <c>x = GetTypeInfo(DataType.X)</c> assignment/declaration across the assembly.
 /// </summary>
-public sealed class TypeInfoCorrelator
+internal sealed class TypeInfoCorrelator
 {
     private readonly Dictionary<ISymbol, HashSet<string>> _varToNames;
 

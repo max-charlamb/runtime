@@ -13,7 +13,7 @@ namespace CdacUsageGraph.Docs;
 /// tables; both the <c>docs</c> command and the doc-drift unit test use it, and
 /// <c>generate-docs.ps1</c> is a thin wrapper around the command.
 /// </summary>
-public sealed partial class DocGenerator
+internal sealed partial class DocGenerator
 {
     private readonly UsageGraph _graph;
     private readonly DocDescriptorMeanings _meanings;

@@ -144,7 +144,10 @@ regen use one implementation. The loader derives its source list (including the 
 files linked via
 `<Compile Include>`) directly from the cDAC `.csproj`s and **fails fast** if a referenced linked
 file is missing or if discovery finds no Data types / registrations -- so a broken or drifted
-compilation input surfaces as an error rather than a silently under-reported graph.
+compilation input surfaces as an error rather than a silently under-reported graph. The manual
+compilation's expected source-generator-related diagnostic IDs/counts are also baselined; any
+unexpected semantic error fails CI. Generated `Write<Property>` calls that appear as invalid
+Roslyn operations are recovered and recorded as field writes.
 
 ## Known limitations
 
@@ -155,12 +158,15 @@ compilation input surfaces as an error rather than a silently under-reported gra
   Use the `_suppress` list in `data-descriptor-meanings.json` to prune specific false positives.
 - Field access through **indirect `TypeInfo` flows** (a `Target.TypeInfo` returned
   from a helper method, or stored in a collection) is not traced.
+- `TypeInfo` propagation is **context-insensitive**: a reusable symbol accumulates
+  every DataType that can flow to it. This is conservative and can over-attribute
+  fields if the same helper is called by different contracts with different TypeInfos.
 - **Interface-typed reads are conservative.** When a contract reads a member through
   an interface implemented by several Data types (e.g. `IExceptionClauseData`,
-  `IGCHeap`), the read is attributed to the `[Field]` member of *every* implementing
-  Data type -- the concrete runtime type can't be known statically. Members that a
-  given type implements as computed/pass-through (non-`[Field]`) properties are
-  correctly not credited to that type.
+  `IGCHeap`), the read is attributed to *every* implementing Data type -- the concrete
+  runtime type can't be known statically. Each implementation uses the same property
+  provenance rules as a direct read, so computed/parsed properties resolve to their
+  actual underlying fields.
 - **Delegate / `Func<>`** call edges are not resolved (as with any static analysis).
 - **Cross-contract** dependencies are correctly *not* attributed to the caller: a
   contract that calls `_target.Contracts.<X>` records `X` in its **Contracts used**

@@ -5,7 +5,7 @@ namespace CdacUsageGraph.Model;
 
 /// <summary>How a contract uses a Data descriptor field. The member names are emitted verbatim in
 /// the reports, so they must not be renamed without updating the expected output.</summary>
-public enum UsageKind
+internal enum UsageKind
 {
     /// <summary>The field's value is read (e.g. <c>thread.Frame</c>).</summary>
     Read,

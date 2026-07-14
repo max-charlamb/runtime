@@ -1,10 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
 using CdacUsageGraph.Analysis;
 using CdacUsageGraph.Compilation;
 using CdacUsageGraph.Discovery;
 using CdacUsageGraph.Model;
+using CdacUsageGraph.Reporting;
 using Xunit;
 
 namespace CdacUsageGraph.Tests;
@@ -21,7 +23,7 @@ public sealed class UsageWalkerIntegrationTests
         if (root is null)
             return null;
 
-        Microsoft.CodeAnalysis.Compilation compilation = new CdacCompilationLoader().Load(root.FullName);
+        Microsoft.CodeAnalysis.Compilation compilation = CdacCompilationLoader.Load(root.FullName);
         DataTypeIndex index = DataTypeIndex.Build(compilation);
         IReadOnlyList<ContractRegistration> registrations = ContractRegistrationParser.Parse(compilation);
         TypeInfoCorrelator correlator = TypeInfoCorrelator.Build(compilation);
@@ -204,6 +206,30 @@ public sealed class UsageWalkerIntegrationTests
         {
             Assert.True(fields!.TryGetValue(field, out IReadOnlyCollection<UsageKind>? kinds));
             Assert.Contains(UsageKind.Write, kinds!);
+        }
+    }
+
+    [Fact]
+    public void JsonReportPreservesAllImplementationsForContractVersion()
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+        string output = Directory.CreateTempSubdirectory("CdacUsageGraphJson").FullName;
+        try
+        {
+            new JsonReportWriter().Write(built.Value.Graph, output);
+            using JsonDocument document = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(output, "contract-usage.json")));
+            JsonElement gcInfo = document.RootElement.EnumerateArray().Single(e =>
+                e.GetProperty("contract").GetString() == "IGCInfo" &&
+                e.GetProperty("version").GetString() == "c1");
+
+            Assert.True(gcInfo.GetProperty("impls").GetArrayLength() > 1);
+            Assert.False(gcInfo.TryGetProperty("impl", out _));
+        }
+        finally
+        {
+            Directory.Delete(output, recursive: true);
         }
     }
 

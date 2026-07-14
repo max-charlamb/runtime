@@ -15,7 +15,7 @@ namespace CdacUsageGraph.Compilation;
 /// No MSBuild restore is required; the source-generated <c>IData&lt;T&gt;.Create</c> factories are
 /// not needed to analyze contract-to-Data usage, so compilation errors are expected and non-fatal.
 /// </summary>
-public sealed class CdacCompilationLoader
+internal static class CdacCompilationLoader
 {
     // The manual compilation intentionally omits the IData source generator. Keep the expected
     // error surface explicit: a new/missing diagnostic means the semantic model changed and the
@@ -39,7 +39,7 @@ public sealed class CdacCompilationLoader
     ];
 
     /// <summary>Loads and parses the cDAC source rooted at <paramref name="cdacRoot"/>.</summary>
-    public CSharpCompilation Load(string cdacRoot)
+    public static CSharpCompilation Load(string cdacRoot)
     {
         List<string> files = new List<string>();
         List<string> missingLinked = new List<string>();

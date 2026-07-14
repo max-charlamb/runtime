@@ -4,7 +4,7 @@
 namespace CdacUsageGraph.Model;
 
 /// <summary>Registration reduced to plain strings for reporting (no Roslyn symbols).</summary>
-public sealed record RegistrationInfo(string Contract, string Version, string Impl);
+internal sealed record RegistrationInfo(string Contract, string Version, string Impl);
 
 /// <summary>
 /// Immutable result of the analysis: for each (<see cref="ContractLabel"/>, Data type) the
@@ -12,7 +12,7 @@ public sealed record RegistrationInfo(string Contract, string Version, string Im
 /// a contract uses is derivable from the <see cref="FieldUsage"/> keys (a type used with no field
 /// read appears with an empty field set).
 /// </summary>
-public sealed record UsageGraph(
+internal sealed record UsageGraph(
     string CdacRoot,
     int DataTypeCount,
     IReadOnlyList<RegistrationInfo> Registrations,

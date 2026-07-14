@@ -4,9 +4,9 @@
 # Paths default relative to this script's location within the repo:
 #   src/native/managed/cdac/tools/CdacUsageGraph -> repo root is 6 levels up.
 param(
-    [string]$DocsDir = (Join-Path $PSScriptRoot "..\..\..\..\..\..\docs\design\datacontracts"),
-    [string]$Json    = (Join-Path $PSScriptRoot "output\contract-usage.json"),
-    [string]$OutFile = (Join-Path $PSScriptRoot "output\doc-comparison.md")
+    [string]$DocsDir = (Join-Path $PSScriptRoot "../../../../../../docs/design/datacontracts"),
+    [string]$Json    = (Join-Path $PSScriptRoot "output/contract-usage.json"),
+    [string]$OutFile = (Join-Path $PSScriptRoot "output/doc-comparison.md")
 )
 
 # ---- 1. Load tool output, union types + (type,field) per contract interface ----

@@ -14,7 +14,7 @@ namespace CdacUsageGraph;
 /// Orchestrates the analysis: load compilation (A) -&gt; discover Data types and registrations (B)
 /// -&gt; forward interprocedural walk (C/D) -&gt; emit reports (E).
 /// </summary>
-public sealed class AnalysisPipeline
+internal sealed class AnalysisPipeline
 {
     private static readonly IReportWriter[] s_writers =
     [
@@ -39,7 +39,7 @@ public sealed class AnalysisPipeline
             throw new InvalidOperationException($"Could not find the cDAC Contracts project under '{cdacRoot}'; pass --cdac-root.");
 
         // Phase A: compilation.
-        CSharpCompilation compilation = new CdacCompilationLoader().Load(cdacRoot);
+        CSharpCompilation compilation = CdacCompilationLoader.Load(cdacRoot);
 
         // Phase B: discovery.
         DataTypeIndex index = DataTypeIndex.Build(compilation);
