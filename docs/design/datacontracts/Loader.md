@@ -228,9 +228,6 @@ enum ClrModifiableAssemblies : uint
 | `InstMethodHashTable` | `Count` | Count of elements in the hash table |
 | `InstMethodHashTable` | `VolatileEntryValue` | The data stored in the hash table entry |
 | `InstMethodHashTable` | `VolatileEntryNextEntry` | Next pointer in the hash table entry |
-| `DynamicILBlobTable` | `Table` | Pointer to IL blob table |
-| `DynamicILBlobTable` | `TableSize` | Number of entries in table |
-| `DynamicILBlobTable` | `EntrySize` | Size of each table entry |
 | `DynamicILBlobTable` | `EntryMethodToken` | Offset of each entry method token from entry address |
 | `DynamicILBlobTable` | `EntryIL` | Offset of each entry IL from entry address |
 | `LoaderHeap` | `FirstBlock` | Pointer to the first `LoaderHeapBlock` in the linked list |

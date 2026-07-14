@@ -159,6 +159,15 @@ public sealed class UsageWalker
                 RecordType(label, dt);
                 EnqueueDataInitializer(dt, label);
             }
+            else if (!_index.IsField(pr.Property) &&
+                _index.IsInitializedByConstructor(pr.Property.OriginalDefinition))
+            {
+                // A parsed/derived auto-property populated by an explicit constructor (e.g. the
+                // nested Loader DynamicILBlobTable.HashTable). Walk the constructor to expose its
+                // actual fields/helper dependencies rather than reporting the aggregate property.
+                RecordType(label, dt);
+                EnqueueDataConstructors(dt, label);
+            }
             else
             {
                 RecordField(label, dt, _index.NativeName(pr.Property), OperationInspector.ClassifyPropertyRef(pr));
@@ -228,7 +237,7 @@ public sealed class UsageWalker
 
     // ---- recording helpers -----------------------------------------------------------------
 
-    private static string DataName(ITypeSymbol t) => "Data." + ((INamedTypeSymbol)t.OriginalDefinition).Name;
+    private string DataName(ITypeSymbol t) => "Data." + _index.DescriptorName(t);
 
     private void RecordType(ContractLabel label, ITypeSymbol t) => _collector.RecordType(label, DataName(t));
 
@@ -368,6 +377,16 @@ public sealed class UsageWalker
         {
             if (method.DeclaringSyntaxReferences.Length > 0)
                 _queue.Enqueue(new WorkItem(method.OriginalDefinition, label,
+                    new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
+        }
+    }
+
+    private void EnqueueDataConstructors(INamedTypeSymbol dataType, ContractLabel label)
+    {
+        foreach (IMethodSymbol constructor in dataType.InstanceConstructors)
+        {
+            if (constructor.DeclaringSyntaxReferences.Length > 0)
+                _queue.Enqueue(new WorkItem(constructor.OriginalDefinition, label,
                     new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
         }
     }

@@ -97,4 +97,38 @@ public sealed class DataTypeIndexTests
         Assert.True(index.TryGetType("Widget", out INamedTypeSymbol resolved));
         Assert.Equal(widget, resolved, SymbolEqualityComparer.Default);
     }
+
+    [Fact]
+    public void UsesNativeDescriptorNameWhenItDiffersFromClassName()
+    {
+        const string source = """
+            namespace Microsoft.Diagnostics.DataContractReader
+            {
+                public enum DataType { WidgetTable }
+                public sealed class CdacTypeAttribute : System.Attribute
+                {
+                    public CdacTypeAttribute(params string[] names) { }
+                }
+            }
+            namespace Microsoft.Diagnostics.DataContractReader.Data
+            {
+                public interface IData<T> { }
+
+                [Microsoft.Diagnostics.DataContractReader.CdacType(
+                    nameof(Microsoft.Diagnostics.DataContractReader.DataType.WidgetTable))]
+                public sealed class WidgetEntry : IData<WidgetEntry> { }
+            }
+            """;
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            "DescriptorNameTest",
+            [CSharpSyntaxTree.ParseText(source)],
+            RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        INamedTypeSymbol entry = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Data.WidgetEntry")!;
+
+        DataTypeIndex index = DataTypeIndex.Build(compilation);
+
+        Assert.Equal("WidgetTable", index.DescriptorName(entry));
+    }
 }

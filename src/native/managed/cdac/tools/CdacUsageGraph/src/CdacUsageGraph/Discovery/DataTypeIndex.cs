@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace CdacUsageGraph.Discovery;
 
@@ -19,15 +20,21 @@ public sealed class DataTypeIndex
     private readonly HashSet<INamedTypeSymbol> _dataTypes;
     private readonly Dictionary<string, INamedTypeSymbol> _cdacNameToType;
     private readonly Dictionary<IPropertySymbol, string> _propertyNativeName;
+    private readonly Dictionary<INamedTypeSymbol, string> _typeToDescriptorName;
+    private readonly Microsoft.CodeAnalysis.Compilation _compilation;
 
     private DataTypeIndex(
         HashSet<INamedTypeSymbol> dataTypes,
         Dictionary<string, INamedTypeSymbol> cdacNameToType,
-        Dictionary<IPropertySymbol, string> propertyNativeName)
+        Dictionary<IPropertySymbol, string> propertyNativeName,
+        Dictionary<INamedTypeSymbol, string> typeToDescriptorName,
+        Microsoft.CodeAnalysis.Compilation compilation)
     {
         _dataTypes = dataTypes;
         _cdacNameToType = cdacNameToType;
         _propertyNativeName = propertyNativeName;
+        _typeToDescriptorName = typeToDescriptorName;
+        _compilation = compilation;
     }
 
     public int Count => _dataTypes.Count;
@@ -73,6 +80,30 @@ public sealed class DataTypeIndex
         return false;
     }
 
+    /// <summary>True if an explicit constructor assigns <paramref name="property"/>.</summary>
+    public bool IsInitializedByConstructor(IPropertySymbol property)
+    {
+        foreach (IMethodSymbol constructor in property.ContainingType.InstanceConstructors)
+        {
+            foreach (SyntaxReference reference in constructor.DeclaringSyntaxReferences)
+            {
+                SyntaxNode syntax = reference.GetSyntax();
+                SemanticModel model = _compilation.GetSemanticModel(syntax.SyntaxTree);
+                if (model.GetOperation(syntax) is not IOperation body)
+                    continue;
+                foreach (ISimpleAssignmentOperation assignment in
+                    body.DescendantsAndSelf().OfType<ISimpleAssignmentOperation>())
+                {
+                    if (assignment.Target is IPropertyReferenceOperation target &&
+                        SymbolEqualityComparer.Default.Equals(
+                            target.Property.OriginalDefinition, property.OriginalDefinition))
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /// <summary>The discovered Data types that implement <paramref name="interfaceType"/>.</summary>
     public IEnumerable<INamedTypeSymbol> DataTypesImplementing(INamedTypeSymbol interfaceType)
     {
@@ -92,6 +123,17 @@ public sealed class DataTypeIndex
             ? n
             : property.Name;
 
+    /// <summary>
+    /// The native DataType descriptor name for a Data class. This differs from the C# class name
+    /// for adapter types such as <c>DynamicILBlobEntry</c> (descriptor
+    /// <c>DynamicILBlobTable</c>) and <c>GCHeapSVR</c> (descriptor <c>GCHeap</c>).
+    /// </summary>
+    public string DescriptorName(ITypeSymbol type) =>
+        type is INamedTypeSymbol named &&
+        _typeToDescriptorName.TryGetValue(named.OriginalDefinition, out string? descriptorName)
+            ? descriptorName
+            : type.Name;
+
     /// <summary>Builds the index by scanning every type in the compilation's assembly.</summary>
     public static DataTypeIndex Build(Microsoft.CodeAnalysis.Compilation compilation)
     {
@@ -99,6 +141,11 @@ public sealed class DataTypeIndex
         HashSet<INamedTypeSymbol> dataTypes = new HashSet<INamedTypeSymbol>(comparer);
         Dictionary<string, INamedTypeSymbol> cdacNameToType = new Dictionary<string, INamedTypeSymbol>(StringComparer.Ordinal);
         Dictionary<IPropertySymbol, string> propertyNativeName = new Dictionary<IPropertySymbol, string>(comparer);
+        Dictionary<INamedTypeSymbol, string> typeToDescriptorName = new Dictionary<INamedTypeSymbol, string>(comparer);
+        HashSet<string> dataTypeNames = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.DataType")?
+            .GetMembers().OfType<IFieldSymbol>().Select(f => f.Name).ToHashSet(StringComparer.Ordinal)
+            ?? new HashSet<string>(StringComparer.Ordinal);
 
         void VisitType(INamedTypeSymbol t)
         {
@@ -108,6 +155,7 @@ public sealed class DataTypeIndex
             if (isData)
             {
                 dataTypes.Add(t);
+                typeToDescriptorName[t] = t.Name;
                 foreach (IPropertySymbol m in t.GetMembers().OfType<IPropertySymbol>())
                 {
                     if (m.GetAttributes().Any(a =>
@@ -121,7 +169,11 @@ public sealed class DataTypeIndex
                 {
                     foreach (TypedConstant v in cd.ConstructorArguments[0].Values)
                         if (v.Value is string s)
+                        {
                             cdacNameToType[s] = t;
+                            if (dataTypeNames.Contains(s) && typeToDescriptorName[t] == t.Name)
+                                typeToDescriptorName[t] = s;
+                        }
                 }
             }
 
@@ -138,7 +190,8 @@ public sealed class DataTypeIndex
         }
 
         VisitNamespace(compilation.Assembly.GlobalNamespace);
-        return new DataTypeIndex(dataTypes, cdacNameToType, propertyNativeName);
+        return new DataTypeIndex(
+            dataTypes, cdacNameToType, propertyNativeName, typeToDescriptorName, compilation);
     }
 
     // Highest-priority explicit candidate name from [Field]/[FieldAddress], else the property name.

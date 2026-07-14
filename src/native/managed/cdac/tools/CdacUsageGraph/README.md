@@ -43,11 +43,16 @@ which of their `[Field]` descriptor fields the contract implementation uses.
      lookups (`OffsetLookup`), and
    - `TypeInfo.Size` reads, recorded as a synthetic `Size` field.
    `Target.TypeInfo` identities are propagated transitively through assignments,
-   method/constructor arguments and fields (as a set for reusable helpers), so
+   method/constructor arguments, fields, and interface-to-implementation parameters
+   (as a set for reusable helpers), so
    `Read*Field(..., typeInfo, nameof(Field))` and `typeInfo.Fields[nameof(Field)]`
    inside helpers such as `DacEnumerableHash` are attributed to each concrete Data
    type. Parsed aggregate properties declared through `MemberNotNull`/`OnInit`
    (e.g. `EETypeHashTable.Entries`) are replaced by those actual underlying fields.
+   Constructor-derived aggregates (e.g. Loader's `DynamicILBlobTable.HashTable`) are
+   handled similarly. Reports use the native `DataType` descriptor name when an
+   adapter C# class has a different name (`DynamicILBlobEntry` ->
+   `DynamicILBlobTable`).
 
 ## Build & run
 
@@ -160,4 +165,3 @@ compilation input surfaces as an error rather than a silently under-reported gra
 - **Cross-contract** dependencies are correctly *not* attributed to the caller: a
   contract that calls `_target.Contracts.<X>` records `X` in its **Contracts used**
   list rather than absorbing `X`'s data descriptors.
-

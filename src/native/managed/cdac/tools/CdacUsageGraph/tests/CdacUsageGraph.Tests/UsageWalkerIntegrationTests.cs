@@ -162,6 +162,34 @@ public sealed class UsageWalkerIntegrationTests
         Assert.DoesNotContain("Entries", fields.Keys);
     }
 
+    [Fact]
+    public void AttributesDynamicILFieldsAcrossSHashContractBoundary()
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+        UsageGraph graph = built!.Value.Graph;
+        const string dataType = "Data.DynamicILBlobTable";
+
+        // Loader owns the entry traits/direct result read. DynamicILBlobEntry is an adapter C#
+        // class for the native DynamicILBlobTable descriptor, so the native descriptor name is
+        // emitted and the constructor-derived HashTable aggregate is not.
+        Assert.True(graph.FieldUsage.TryGetValue((new ContractLabel("ILoader", "c1"), dataType),
+            out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? loaderFields));
+        Assert.Contains("EntryIL", loaderFields!.Keys);
+        Assert.Contains("EntryMethodToken", loaderFields.Keys);
+        Assert.DoesNotContain("HashTable", loaderFields.Keys);
+
+        // Table parsing happens inside the SHash contract. Loader records SHash as a dependency;
+        // the table fields (including synthetic Size) belong to ISHash, not ILoader.
+        Assert.True(graph.FieldUsage.TryGetValue((new ContractLabel("ISHash", "c1"), dataType),
+            out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? sHashFields));
+        Assert.Contains("Table", sHashFields!.Keys);
+        Assert.Contains("TableSize", sHashFields.Keys);
+        Assert.Contains("Size", sHashFields.Keys);
+        Assert.DoesNotContain("Table", loaderFields.Keys);
+        Assert.Contains("SHash", graph.ContractsUsed[new ContractLabel("ILoader", "c1")]);
+    }
+
     private static HashSet<string> DataTypesUsed(UsageGraph graph, ContractLabel label) =>
         graph.FieldUsage.Keys.Where(k => k.Label == label).Select(k => k.DataType).ToHashSet();
 }

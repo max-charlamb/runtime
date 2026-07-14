@@ -42,8 +42,21 @@ public sealed class TypeInfoCorrelator
         Dictionary<ISymbol, HashSet<string>> varToNames =
             new Dictionary<ISymbol, HashSet<string>>(SymbolEqualityComparer.Default);
         List<IOperation> operations = new List<IOperation>();
+        List<(IParameterSymbol Interface, IParameterSymbol Implementation)> parameterLinks = new();
 
         foreach (INamedTypeSymbol type in EnumerateAllTypes(compilation.Assembly.GlobalNamespace))
+        {
+            foreach (INamedTypeSymbol iface in type.AllInterfaces)
+            {
+                foreach (IMethodSymbol interfaceMethod in iface.GetMembers().OfType<IMethodSymbol>())
+                {
+                    if (type.FindImplementationForInterfaceMember(interfaceMethod) is not IMethodSymbol implementation)
+                        continue;
+                    for (int i = 0; i < interfaceMethod.Parameters.Length && i < implementation.Parameters.Length; i++)
+                        parameterLinks.Add((interfaceMethod.Parameters[i], implementation.Parameters[i]));
+                }
+            }
+
         foreach (IMethodSymbol method in type.GetMembers().OfType<IMethodSymbol>())
         {
             SyntaxReference? sref = method.DeclaringSyntaxReferences.FirstOrDefault();
@@ -56,6 +69,7 @@ public sealed class TypeInfoCorrelator
 
             operations.AddRange(body.DescendantsAndSelf());
         }
+        }
 
         // Fixed point: seed direct GetTypeInfo assignments, then propagate identities through
         // aliases, method/constructor arguments -> parameters, and parameter -> field assignments.
@@ -65,6 +79,9 @@ public sealed class TypeInfoCorrelator
         do
         {
             changed = false;
+            foreach ((IParameterSymbol interfaceParameter, IParameterSymbol implementationParameter) in parameterLinks)
+                changed |= AddNames(implementationParameter, NamesOfSymbol(interfaceParameter));
+
             foreach (IOperation op in operations)
             {
                 switch (op)
@@ -107,6 +124,9 @@ public sealed class TypeInfoCorrelator
                     ? names
                     : [];
         }
+
+        IEnumerable<string> NamesOfSymbol(ISymbol symbol) =>
+            varToNames.TryGetValue(symbol.OriginalDefinition, out HashSet<string>? names) ? names : [];
 
         bool AddNames(ISymbol symbol, IEnumerable<string> names)
         {

@@ -33,9 +33,9 @@ In order to properly populate an SHash, we need to know the size of each element
 Data descriptors used:
 | Data Descriptor Name | Field | Meaning |
 | --- | --- | --- |
-| `type` | `Table` | Address of the SHash table |
-| `type` | `TableSize` | Number of entries in the table |
-| `type` | `EntrySize` | Size in bytes of each table entry |
+| `DynamicILBlobTable` | `Table` | Address of the SHash table |
+| `DynamicILBlobTable` | `TableSize` | Number of entries in the table |
+| `DynamicILBlobTable` | `Size` | Size in bytes of each table entry |
 
 ``` csharp
 
@@ -52,7 +52,7 @@ ISHash<TKey, TEntry> ISHash.CreateSHash<TKey, TEntry>(Target target, TargetPoint
 {
     TargetPointer table = target.ReadPointer(address + /* type::Table offset */);
     uint tableSize = target.Read<uint>(address + /* type::TableSize offset */);
-    uint entrySize = target.Read<uint>(address + /* type::EntrySize offset */);
+    uint entrySize = type.Size ?? 0;
     List<TEntry> entries = [];
     for (int i = 0; i < tableSize; i++)
     {
