@@ -140,6 +140,28 @@ public sealed class UsageWalkerIntegrationTests
         Assert.Contains("RuntimeThreadLocals", threadFields!.Keys);
     }
 
+    [Theory]
+    [InlineData("Data.EETypeHashTable")]
+    [InlineData("Data.InstMethodHashTable")]
+    public void ResolvesFieldsReadThroughReusableTypeInfoHelper(string dataType)
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+        UsageGraph graph = built!.Value.Graph;
+
+        // Both hash Data types populate a derived Entries collection by passing their TypeInfo
+        // through OnInit -> DacEnumerableHash's constructor parameter -> _type field. The helper
+        // reads the actual descriptor fields through Read*Field/TypeInfo.Fields, so those fields
+        // should be attributed to each concrete hash type rather than the aggregate Entries name.
+        Assert.True(graph.FieldUsage.TryGetValue((new ContractLabel("ILoader", "c1"), dataType),
+            out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? fields));
+        Assert.Contains("Buckets", fields!.Keys);
+        Assert.Contains("Count", fields.Keys);
+        Assert.Contains("VolatileEntryNextEntry", fields.Keys);
+        Assert.Contains("VolatileEntryValue", fields.Keys);
+        Assert.DoesNotContain("Entries", fields.Keys);
+    }
+
     private static HashSet<string> DataTypesUsed(UsageGraph graph, ContractLabel label) =>
         graph.FieldUsage.Keys.Where(k => k.Label == label).Select(k => k.DataType).ToHashSet();
 }

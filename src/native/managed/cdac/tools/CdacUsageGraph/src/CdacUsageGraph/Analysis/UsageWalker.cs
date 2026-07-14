@@ -65,6 +65,8 @@ public sealed class UsageWalker
 
     private void HandleInvocation(IInvocationOperation inv, ContractLabel label, Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
     {
+        HandleTypeInfoFieldRead(inv, label);
+
         foreach (ITypeSymbol ta in inv.TargetMethod.TypeArguments)
         {
             ITypeSymbol r = Resolve(ta, subst);
@@ -86,6 +88,33 @@ public sealed class UsageWalker
             IMethodSymbol? concrete = FindConcreteMethod(implType, callee);
             if (concrete is not null)
                 EnqueueMember(concrete, label, subst);
+        }
+    }
+
+    // Target.Read*Field(address, typeInfo, nameof(Field)): a descriptor-field read expressed
+    // through the Target helper API rather than TypeInfo.Fields["..."]. The correlator follows the
+    // TypeInfo identity through aliases and helper parameters/fields, so reusable helpers such as
+    // DacEnumerableHash attribute these fields to every concrete Data type that can flow in.
+    private void HandleTypeInfoFieldRead(IInvocationOperation invocation, ContractLabel label)
+    {
+        if (!invocation.TargetMethod.Name.StartsWith("Read", StringComparison.Ordinal) ||
+            !invocation.TargetMethod.Name.Contains("Field", StringComparison.Ordinal))
+            return;
+
+        IArgumentOperation? typeInfoArgument = invocation.Arguments.FirstOrDefault(
+            a => a.Parameter?.Type.Name == "TypeInfo" && a.Parameter.Type.ContainingType?.Name == "Target");
+        IArgumentOperation? fieldNameArgument = invocation.Arguments.FirstOrDefault(
+            a => a.Value.ConstantValue is { HasValue: true, Value: string });
+        if (typeInfoArgument is null ||
+            fieldNameArgument?.Value.ConstantValue is not { HasValue: true, Value: string fieldName })
+            return;
+
+        foreach (string dataTypeName in _correlator.GetTypeInfoDataNames(typeInfoArgument.Value))
+        {
+            string dataName = _index.TryGetType(dataTypeName, out INamedTypeSymbol dataType)
+                ? DataName(dataType)
+                : "Data." + dataTypeName;
+            _collector.RecordField(label, dataName, fieldName, UsageKind.Read);
         }
     }
 
@@ -121,6 +150,15 @@ public sealed class UsageWalker
                 RecordType(label, dt);
                 EnqueuePropertyGetter(pr.Property.OriginalDefinition, label);
             }
+            else if (!_index.IsField(pr.Property) &&
+                DataTypeIndex.IsInitializedByOnInit(pr.Property.OriginalDefinition))
+            {
+                // A parsed/derived auto-property populated by OnInit (e.g.
+                // EETypeHashTable.Entries). It is not a descriptor field itself; walk OnInit so
+                // helper calls expose the actual fields (Buckets, Count, VolatileEntry*, ...).
+                RecordType(label, dt);
+                EnqueueDataInitializer(dt, label);
+            }
             else
             {
                 RecordField(label, dt, _index.NativeName(pr.Property), OperationInspector.ClassifyPropertyRef(pr));
@@ -152,20 +190,31 @@ public sealed class UsageWalker
         else if (pr.Property.ContainingType?.Name == "TypeInfo")
         {
             // A layout reference on Target.TypeInfo. Resolve which Data type it describes.
-            string? dn = _correlator.GetTypeInfoDataName(pr.Instance);
-            if (dn is null)
+            IReadOnlyCollection<string> dataTypeNames = _correlator.GetTypeInfoDataNames(pr.Instance);
+            if (dataTypeNames.Count == 0)
                 return;
-            string dataName = _index.TryGetType(dn, out INamedTypeSymbol dcls) ? DataName(dcls) : "Data." + dn;
 
             if (pr.Property.Name == "Fields" && OperationInspector.ExtractFieldsKey(pr) is string keyName)
             {
                 // GetTypeInfo(DataType.X).Fields["nativeName"] -- a raw-string/constant field-offset lookup.
-                _collector.RecordField(label, dataName, keyName, UsageKind.OffsetLookup);
+                foreach (string dataTypeName in dataTypeNames)
+                {
+                    string dataName = _index.TryGetType(dataTypeName, out INamedTypeSymbol dataType)
+                        ? DataName(dataType)
+                        : "Data." + dataTypeName;
+                    _collector.RecordField(label, dataName, keyName, UsageKind.OffsetLookup);
+                }
             }
             else if (pr.Property.Name == "Size")
             {
                 // GetTypeInfo(DataType.X).Size -- the contract depends on the descriptor's overall size.
-                _collector.RecordField(label, dataName, "Size", UsageKind.Read);
+                foreach (string dataTypeName in dataTypeNames)
+                {
+                    string dataName = _index.TryGetType(dataTypeName, out INamedTypeSymbol dataType)
+                        ? DataName(dataType)
+                        : "Data." + dataTypeName;
+                    _collector.RecordField(label, dataName, "Size", UsageKind.Read);
+                }
             }
         }
     }
@@ -311,6 +360,16 @@ public sealed class UsageWalker
     {
         if (_cmp.Equals(property.ContainingAssembly, _compilation.Assembly))
             _queue.Enqueue(new WorkItem(property, label, new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
+    }
+
+    private void EnqueueDataInitializer(INamedTypeSymbol dataType, ContractLabel label)
+    {
+        foreach (IMethodSymbol method in dataType.GetMembers("OnInit").OfType<IMethodSymbol>())
+        {
+            if (method.DeclaringSyntaxReferences.Length > 0)
+                _queue.Enqueue(new WorkItem(method.OriginalDefinition, label,
+                    new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
+        }
     }
 
     // True if the property computes its value (expression body `=> expr` or any accessor with a

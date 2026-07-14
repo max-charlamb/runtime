@@ -40,6 +40,39 @@ public sealed class DataTypeIndex
     public bool IsField(IPropertySymbol property) =>
         _propertyNativeName.ContainsKey((IPropertySymbol)property.OriginalDefinition);
 
+    /// <summary>
+    /// True if a Data type's <c>OnInit</c> declares via <see cref="System.Diagnostics.CodeAnalysis.MemberNotNullAttribute"/>
+    /// that it initializes <paramref name="property"/>. Such properties are parsed/derived by
+    /// <c>OnInit</c> rather than being descriptor fields themselves; walking <c>OnInit</c> exposes
+    /// the actual fields on which they depend.
+    /// </summary>
+    public static bool IsInitializedByOnInit(IPropertySymbol property)
+    {
+        foreach (IMethodSymbol method in property.ContainingType.GetMembers("OnInit").OfType<IMethodSymbol>())
+        {
+            foreach (AttributeData attribute in method.GetAttributes())
+            {
+                if (attribute.AttributeClass?.ToDisplayString() !=
+                    "System.Diagnostics.CodeAnalysis.MemberNotNullAttribute")
+                    continue;
+
+                foreach (TypedConstant argument in attribute.ConstructorArguments)
+                {
+                    if (argument.Kind == TypedConstantKind.Array)
+                    {
+                        if (argument.Values.Any(v => v.Value is string name && name == property.Name))
+                            return true;
+                    }
+                    else if (argument.Value is string name && name == property.Name)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     /// <summary>The discovered Data types that implement <paramref name="interfaceType"/>.</summary>
     public IEnumerable<INamedTypeSymbol> DataTypesImplementing(INamedTypeSymbol interfaceType)
     {
