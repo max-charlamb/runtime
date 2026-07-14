@@ -193,4 +193,71 @@ public sealed class DataTypeIndexTests
         Assert.Contains("Value", graph.FieldUsage[
             (new ContractLabel("ITest", "c1"), "Data.Direct")].Keys);
     }
+
+    [Fact]
+    public void WalksGenericMemberForEachTypeSubstitution()
+    {
+        const string source = """
+            namespace Microsoft.Diagnostics.DataContractReader
+            {
+                public sealed class CdacTypeAttribute : System.Attribute
+                {
+                    public CdacTypeAttribute(params string[] names) { }
+                }
+            }
+            namespace Microsoft.Diagnostics.DataContractReader.Data
+            {
+                public interface IData<T> { }
+                [Microsoft.Diagnostics.DataContractReader.CdacType("First")]
+                public sealed class First : IData<First> { }
+                [Microsoft.Diagnostics.DataContractReader.CdacType("Second")]
+                public sealed class Second : IData<Second> { }
+            }
+            namespace Microsoft.Diagnostics.DataContractReader.Contracts
+            {
+                using Microsoft.Diagnostics.DataContractReader.Data;
+
+                public sealed class ProcessedData
+                {
+                    public T GetOrAdd<T>(int address) => default!;
+                }
+
+                public sealed class Helper<T>
+                {
+                    private readonly ProcessedData _data;
+                    public Helper(ProcessedData data) => _data = data;
+                    public T Load() => _data.GetOrAdd<T>(0);
+                }
+
+                public sealed class TestContract
+                {
+                    private readonly ProcessedData _data = new();
+                    public void ReadBoth()
+                    {
+                        _ = new Helper<First>(_data).Load();
+                        _ = new Helper<Second>(_data).Load();
+                    }
+                }
+            }
+            """;
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            "GenericSubstitutionTest",
+            [CSharpSyntaxTree.ParseText(source)],
+            RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        INamedTypeSymbol impl = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Contracts.TestContract")!;
+        DataTypeIndex index = DataTypeIndex.Build(compilation);
+        UsageGraph graph = new UsageWalker(
+            compilation, index, TypeInfoCorrelator.Build(compilation)).Walk(
+                [new ContractRegistration("ITest", "c1", impl)], "");
+        ContractLabel label = new("ITest", "c1");
+        HashSet<string> used = graph.FieldUsage.Keys
+            .Where(k => k.Label == label)
+            .Select(k => k.DataType)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("Data.First", used);
+        Assert.Contains("Data.Second", used);
+    }
 }

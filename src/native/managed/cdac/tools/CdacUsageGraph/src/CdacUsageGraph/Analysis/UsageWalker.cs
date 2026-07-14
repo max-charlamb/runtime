@@ -23,7 +23,7 @@ public sealed class UsageWalker
     private readonly SymbolEqualityComparer _cmp = SymbolEqualityComparer.Default;
 
     private readonly Queue<WorkItem> _queue = new();
-    private readonly HashSet<(ISymbol, ContractLabel)> _visited;
+    private readonly HashSet<WorkItem> _visited;
     private readonly UsageCollector _collector = new();
 
     public UsageWalker(Microsoft.CodeAnalysis.Compilation compilation, DataTypeIndex index, TypeInfoCorrelator correlator)
@@ -31,7 +31,7 @@ public sealed class UsageWalker
         _compilation = compilation;
         _index = index;
         _correlator = correlator;
-        _visited = new HashSet<(ISymbol, ContractLabel)>(new MemberLabelComparer(_cmp));
+        _visited = new HashSet<WorkItem>(new WorkItemComparer(_cmp));
     }
 
     internal UsageGraph Walk(IReadOnlyList<ContractRegistration> registrations, string cdacRoot)
@@ -47,7 +47,7 @@ public sealed class UsageWalker
         while (_queue.Count > 0)
         {
             WorkItem item = _queue.Dequeue();
-            if (!_visited.Add((item.Member, item.Label)))
+            if (!_visited.Add(item))
                 continue;
 
             foreach (IOperation body in GetMemberOperations(item.Member))
@@ -440,13 +440,40 @@ public sealed class UsageWalker
         }
     }
 
-    private sealed class MemberLabelComparer(SymbolEqualityComparer comparer)
-        : IEqualityComparer<(ISymbol, ContractLabel)>
+    private sealed class WorkItemComparer(SymbolEqualityComparer comparer)
+        : IEqualityComparer<WorkItem>
     {
-        public bool Equals((ISymbol, ContractLabel) x, (ISymbol, ContractLabel) y) =>
-            comparer.Equals(x.Item1, y.Item1) && x.Item2 == y.Item2;
+        public bool Equals(WorkItem? x, WorkItem? y)
+        {
+            if (ReferenceEquals(x, y))
+                return true;
+            if (x is null || y is null ||
+                !comparer.Equals(x.Member, y.Member) ||
+                x.Label != y.Label ||
+                x.Subst.Count != y.Subst.Count)
+                return false;
 
-        public int GetHashCode((ISymbol, ContractLabel) o) =>
-            HashCode.Combine(comparer.GetHashCode(o.Item1), o.Item2);
+            foreach (KeyValuePair<ITypeParameterSymbol, ITypeSymbol> entry in x.Subst)
+            {
+                if (!y.Subst.TryGetValue(entry.Key, out ITypeSymbol? other) ||
+                    !comparer.Equals(entry.Value, other))
+                    return false;
+            }
+            return true;
+        }
+
+        public int GetHashCode(WorkItem item)
+        {
+            int substitutionsHash = 0;
+            foreach (KeyValuePair<ITypeParameterSymbol, ITypeSymbol> entry in item.Subst)
+            {
+                // XOR makes the aggregate independent of dictionary iteration order.
+                substitutionsHash ^= HashCode.Combine(
+                    comparer.GetHashCode(entry.Key),
+                    comparer.GetHashCode(entry.Value));
+            }
+            return HashCode.Combine(
+                comparer.GetHashCode(item.Member), item.Label, substitutionsHash);
+        }
     }
 }
