@@ -33,7 +33,12 @@ which of their `[Field]` descriptor fields the contract implementation uses.
    Data type)` field map (the set of Data types used is derivable from its keys):
    - `GetOrAdd<Data.X>()` / generic type arguments / `new Data.X(...)` / `typeof` --
      recorded as a type usage (an entry with no field if nothing is read),
-   - property value reads (`Read` / `Write` / `ReadWrite`),
+   - property value reads (`Read` / `Write` / `ReadWrite`). Reads of a **computed**
+     Data property (one with a getter body, e.g. `Assembly.IsError => Error != Null`
+     or `TLSIndex.IndexOffset => TLSIndexRawIndex & 0xFFFFFF`) are resolved to the
+     actual descriptor fields the getter reads, rather than the derived name;
+     auto-properties -- whether `[Field]` or `OnInit`-populated (e.g.
+     `Thread.ThreadHandle`) -- are real fields and recorded as-is,
    - `nameof(Data.X.Field)` and raw-string `TypeInfo.Fields["nativeName"]` offset
      lookups (`OffsetLookup`), and
    - `TypeInfo.Size` reads, recorded as a synthetic `Size` field.

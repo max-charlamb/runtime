@@ -155,9 +155,6 @@ The contract additionally depends on these data descriptors
 | `ThreadStore` | `PendingCount` | Number of pending threads |
 | `ThreadStore` | `ThreadCount` | Number of threads |
 | `ThreadStore` | `UnstartedCount` | Number of unstarted threads |
-| `TLSIndex` | `IndexOffset` | Offset index for thread local storage |
-| `TLSIndex` | `IndexType` | Type of thread local storage index |
-| `TLSIndex` | `IsAllocated` | Whether TLS storage has been allocated |
 | `TLSIndex` | `TLSIndexRawIndex` | Raw index value containing type and offset |
 <!-- END GENERATED: data-descriptors contract=Thread version=c1 -->
 

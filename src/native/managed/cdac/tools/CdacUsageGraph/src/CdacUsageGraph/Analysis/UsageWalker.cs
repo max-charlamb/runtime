@@ -111,7 +111,20 @@ public sealed class UsageWalker
         if (_index.IsDataType(pr.Property.ContainingType))
         {
             INamedTypeSymbol dt = pr.Property.ContainingType!;
-            RecordField(label, dt, _index.NativeName(pr.Property), OperationInspector.ClassifyPropertyRef(pr));
+            if (HasComputedGetter(pr.Property.OriginalDefinition))
+            {
+                // A computed convenience property (e.g. Assembly.IsError => Error != Null, or
+                // TLSIndex.IndexOffset => TLSIndexRawIndex & 0xFFFFFF). Record the type as used and
+                // follow the getter so the *actual* descriptor fields it reads are attributed
+                // instead of the derived name. Auto-properties -- whether [Field] or OnInit-populated
+                // (e.g. Thread.ThreadHandle) -- are real fields and fall through to RecordField.
+                RecordType(label, dt);
+                EnqueuePropertyGetter(pr.Property.OriginalDefinition, label);
+            }
+            else
+            {
+                RecordField(label, dt, _index.NativeName(pr.Property), OperationInspector.ClassifyPropertyRef(pr));
+            }
         }
         else if (pr.Property.ContainingType is { TypeKind: TypeKind.Interface } iface)
         {
@@ -223,9 +236,22 @@ public sealed class UsageWalker
                 if (model.GetOperation(fieldValue) is IOperation fieldOp)
                     yield return fieldOp;
                 break;
-            case IPropertySymbol when syntax is PropertyDeclarationSyntax { Initializer.Value: { } propValue }:
-                if (model.GetOperation(propValue) is IOperation propOp)
-                    yield return propOp;
+            case IPropertySymbol when syntax is PropertyDeclarationSyntax pds:
+                // Computed getter of a Data property: walk the initializer (= expr), expression body
+                // (=> expr) and accessor bodies so the actual [Field]s it reads are attributed.
+                if (pds.Initializer?.Value is { } initValue && model.GetOperation(initValue) is { } initOp)
+                    yield return initOp;
+                if (pds.ExpressionBody?.Expression is { } exprValue && model.GetOperation(exprValue) is { } exprOp)
+                    yield return exprOp;
+                if (pds.AccessorList is { } accessors)
+                {
+                    foreach (AccessorDeclarationSyntax accessor in accessors.Accessors)
+                    {
+                        SyntaxNode? body = (SyntaxNode?)accessor.Body ?? accessor.ExpressionBody?.Expression;
+                        if (body is not null && model.GetOperation(body) is { } accessorOp)
+                            yield return accessorOp;
+                    }
+                }
                 break;
         }
     }
@@ -277,6 +303,33 @@ public sealed class UsageWalker
         for (int i = 0; i < def.TypeParameters.Length && i < callee.TypeArguments.Length; i++)
             sub[def.TypeParameters[i]] = Resolve(callee.TypeArguments[i], outer);
         _queue.Enqueue(new WorkItem(def, label, sub));
+    }
+
+    // Enqueues a computed Data property so its getter body is walked (recording the actual [Field]s
+    // it reads). No substitution -- Data descriptor types are concrete.
+    private void EnqueuePropertyGetter(IPropertySymbol property, ContractLabel label)
+    {
+        if (_cmp.Equals(property.ContainingAssembly, _compilation.Assembly))
+            _queue.Enqueue(new WorkItem(property, label, new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
+    }
+
+    // True if the property computes its value (expression body `=> expr` or any accessor with a
+    // body), as opposed to an auto-property (`{ get; }`, `{ get; private set; }`, `{ get; init; }`)
+    // -- including [Field] descriptors and OnInit-populated fields, which are actual descriptor data.
+    private static bool HasComputedGetter(IPropertySymbol property)
+    {
+        foreach (SyntaxReference reference in property.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is not PropertyDeclarationSyntax pds)
+                continue;
+            if (pds.ExpressionBody is not null)
+                return true;
+            if (pds.AccessorList is { } accessors)
+                foreach (AccessorDeclarationSyntax accessor in accessors.Accessors)
+                    if (accessor.Body is not null || accessor.ExpressionBody is not null)
+                        return true;
+        }
+        return false;
     }
 
     // Concrete method (by name + arity) implementing/overriding `callee` on `implType` or its base

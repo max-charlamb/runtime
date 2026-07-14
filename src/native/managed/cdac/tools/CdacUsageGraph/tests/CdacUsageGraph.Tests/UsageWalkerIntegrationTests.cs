@@ -117,6 +117,29 @@ public sealed class UsageWalkerIntegrationTests
         Assert.DoesNotContain("FilterOffset", eeFields!.Keys);
     }
 
+    [Fact]
+    public void ComputedConveniencePropertiesResolveToUnderlyingFields()
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+        UsageGraph graph = built!.Value.Graph;
+
+        // IThread reads TLSIndex.IndexOffset/IsAllocated, which are computed (=> TLSIndexRawIndex & ...).
+        // The tool records the actual underlying [Field] (TLSIndexRawIndex), not the derived names.
+        Assert.True(graph.FieldUsage.TryGetValue((new ContractLabel("IThread", "c1"), "Data.TLSIndex"),
+            out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? tlsFields));
+        Assert.Contains("TLSIndexRawIndex", tlsFields!.Keys);
+        Assert.DoesNotContain("IndexOffset", tlsFields!.Keys);
+        Assert.DoesNotContain("IsAllocated", tlsFields!.Keys);
+
+        // OnInit-populated auto-properties (read by name, no computed getter) are actual fields and
+        // are kept -- e.g. Thread.ThreadHandle / Thread.RuntimeThreadLocals.
+        Assert.True(graph.FieldUsage.TryGetValue((new ContractLabel("IThread", "c1"), "Data.Thread"),
+            out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? threadFields));
+        Assert.Contains("ThreadHandle", threadFields!.Keys);
+        Assert.Contains("RuntimeThreadLocals", threadFields!.Keys);
+    }
+
     private static HashSet<string> DataTypesUsed(UsageGraph graph, ContractLabel label) =>
         graph.FieldUsage.Keys.Where(k => k.Label == label).Select(k => k.DataType).ToHashSet();
 }
