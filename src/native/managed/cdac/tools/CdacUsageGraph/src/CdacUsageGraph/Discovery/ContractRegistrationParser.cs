@@ -23,7 +23,7 @@ internal static class ContractRegistrationParser
             "Microsoft.Diagnostics.DataContractReader.Contracts.CoreCLRContracts");
         if (coreContracts is not null)
         {
-            foreach (IMethodSymbol reg in coreContracts.GetMembers("Register").OfType<IMethodSymbol>())
+            foreach (IMethodSymbol reg in coreContracts.GetMembers().OfType<IMethodSymbol>())
             {
                 SyntaxReference? sref = reg.DeclaringSyntaxReferences.FirstOrDefault();
                 if (sref is null)
@@ -54,7 +54,9 @@ internal static class ContractRegistrationParser
                     foreach (IObjectCreationOperation create in inv.Descendants().OfType<IObjectCreationOperation>())
                     {
                         if (create.Type is INamedTypeSymbol impl &&
-                            comparer.Equals(impl.ContainingAssembly, compilation.Assembly))
+                            comparer.Equals(impl.ContainingAssembly, compilation.Assembly) &&
+                            (comparer.Equals(impl, iface) ||
+                             impl.AllInterfaces.Any(i => comparer.Equals(i.OriginalDefinition, iface.OriginalDefinition))))
                         {
                             registrations.Add(new ContractRegistration(iface.Name, version, impl));
                         }

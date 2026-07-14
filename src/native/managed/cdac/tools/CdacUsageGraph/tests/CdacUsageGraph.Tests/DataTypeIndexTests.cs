@@ -260,4 +260,48 @@ public sealed class DataTypeIndexTests
         Assert.Contains("Data.First", used);
         Assert.Contains("Data.Second", used);
     }
+
+    [Fact]
+    public void DiscoversRegistrationsOutsideMethodNamedRegisterAndIgnoresNestedHelpers()
+    {
+        const string source = """
+            namespace Microsoft.Diagnostics.DataContractReader
+            {
+                public sealed class ContractRegistry
+                {
+                    public void Register<T>(string version, System.Func<object, T> factory) { }
+                }
+            }
+            namespace Microsoft.Diagnostics.DataContractReader.Contracts
+            {
+                public interface ITest { }
+                public sealed class Helper { }
+                public sealed class Impl : ITest
+                {
+                    public Impl(Helper helper) { }
+                }
+                public static class CoreCLRContracts
+                {
+                    public static void Configure(
+                        Microsoft.Diagnostics.DataContractReader.ContractRegistry registry)
+                    {
+                        registry.Register<ITest>("c1", _ => new Impl(new Helper()));
+                    }
+                }
+            }
+            """;
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            "RegistrationDiscoveryTest",
+            [CSharpSyntaxTree.ParseText(source)],
+            RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        IReadOnlyList<ContractRegistration> registrations =
+            ContractRegistrationParser.Parse(compilation);
+
+        ContractRegistration registration = Assert.Single(registrations);
+        Assert.Equal("ITest", registration.Contract);
+        Assert.Equal("c1", registration.Version);
+        Assert.Equal("Impl", registration.Impl.Name);
+    }
 }
