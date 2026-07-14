@@ -139,39 +139,11 @@ public sealed class UsageWalker
     {
         if (_index.IsDataType(pr.Property.ContainingType))
         {
-            INamedTypeSymbol dt = pr.Property.ContainingType!;
-            if (HasComputedGetter(pr.Property.OriginalDefinition))
-            {
-                // A computed convenience property (e.g. Assembly.IsError => Error != Null, or
-                // TLSIndex.IndexOffset => TLSIndexRawIndex & 0xFFFFFF). Record the type as used and
-                // follow the getter so the *actual* descriptor fields it reads are attributed
-                // instead of the derived name. Auto-properties -- whether [Field] or OnInit-populated
-                // (e.g. Thread.ThreadHandle) -- are real fields and fall through to RecordField.
-                RecordType(label, dt);
-                EnqueuePropertyGetter(pr.Property.OriginalDefinition, label);
-            }
-            else if (!_index.IsField(pr.Property) &&
-                DataTypeIndex.IsInitializedByOnInit(pr.Property.OriginalDefinition))
-            {
-                // A parsed/derived auto-property populated by OnInit (e.g.
-                // EETypeHashTable.Entries). It is not a descriptor field itself; walk OnInit so
-                // helper calls expose the actual fields (Buckets, Count, VolatileEntry*, ...).
-                RecordType(label, dt);
-                EnqueueDataInitializer(dt, label);
-            }
-            else if (!_index.IsField(pr.Property) &&
-                _index.IsInitializedByConstructor(pr.Property.OriginalDefinition))
-            {
-                // A parsed/derived auto-property populated by an explicit constructor (e.g. the
-                // nested Loader DynamicILBlobTable.HashTable). Walk the constructor to expose its
-                // actual fields/helper dependencies rather than reporting the aggregate property.
-                RecordType(label, dt);
-                EnqueueDataConstructors(dt, label);
-            }
-            else
-            {
-                RecordField(label, dt, _index.NativeName(pr.Property), OperationInspector.ClassifyPropertyRef(pr));
-            }
+            HandleDataProperty(
+                pr.Property,
+                pr.Property.ContainingType!,
+                OperationInspector.ClassifyPropertyRef(pr),
+                label);
         }
         else if (pr.Property.ContainingType is { TypeKind: TypeKind.Interface } iface)
         {
@@ -183,11 +155,8 @@ public sealed class UsageWalker
             UsageKind kind = OperationInspector.ClassifyPropertyRef(pr);
             foreach (INamedTypeSymbol dt in _index.DataTypesImplementing(iface))
             {
-                if (dt.FindImplementationForInterfaceMember(pr.Property.OriginalDefinition) is IPropertySymbol impl
-                    && _index.IsField(impl))
-                {
-                    RecordField(label, dt, _index.NativeName(impl), kind);
-                }
+                if (dt.FindImplementationForInterfaceMember(pr.Property.OriginalDefinition) is IPropertySymbol impl)
+                    HandleDataProperty(impl, dt, kind, label);
             }
         }
         else if (pr.Property.ContainingType?.Name == "ContractRegistry")
@@ -214,6 +183,7 @@ public sealed class UsageWalker
                     _collector.RecordField(label, dataName, keyName, UsageKind.OffsetLookup);
                 }
             }
+
             else if (pr.Property.Name == "Size")
             {
                 // GetTypeInfo(DataType.X).Size -- the contract depends on the descriptor's overall size.
@@ -226,6 +196,25 @@ public sealed class UsageWalker
                 }
             }
         }
+    }
+
+    private void HandleDataProperty(
+        IPropertySymbol property,
+        INamedTypeSymbol dataType,
+        UsageKind kind,
+        ContractLabel label)
+    {
+        DataPropertyInfo info = _index.GetPropertyInfo(property);
+        if (info.Kind == DataPropertyKind.DirectField)
+        {
+            RecordField(label, dataType, info.NativeName, kind);
+            return;
+        }
+
+        RecordType(label, dataType);
+        foreach (ISymbol member in info.ExpansionMembers)
+            _queue.Enqueue(new WorkItem(member, label,
+                new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
     }
 
     private void HandleTypeOf(ITypeOfOperation to, ContractLabel label, Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
@@ -388,53 +377,6 @@ public sealed class UsageWalker
         for (int i = 0; i < def.TypeParameters.Length && i < callee.TypeArguments.Length; i++)
             sub[def.TypeParameters[i]] = Resolve(callee.TypeArguments[i], outer);
         _queue.Enqueue(new WorkItem(def, label, sub));
-    }
-
-    // Enqueues a computed Data property so its getter body is walked (recording the actual [Field]s
-    // it reads). No substitution -- Data descriptor types are concrete.
-    private void EnqueuePropertyGetter(IPropertySymbol property, ContractLabel label)
-    {
-        if (_cmp.Equals(property.ContainingAssembly, _compilation.Assembly))
-            _queue.Enqueue(new WorkItem(property, label, new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
-    }
-
-    private void EnqueueDataInitializer(INamedTypeSymbol dataType, ContractLabel label)
-    {
-        foreach (IMethodSymbol method in dataType.GetMembers("OnInit").OfType<IMethodSymbol>())
-        {
-            if (method.DeclaringSyntaxReferences.Length > 0)
-                _queue.Enqueue(new WorkItem(method.OriginalDefinition, label,
-                    new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
-        }
-    }
-
-    private void EnqueueDataConstructors(INamedTypeSymbol dataType, ContractLabel label)
-    {
-        foreach (IMethodSymbol constructor in dataType.InstanceConstructors)
-        {
-            if (constructor.DeclaringSyntaxReferences.Length > 0)
-                _queue.Enqueue(new WorkItem(constructor.OriginalDefinition, label,
-                    new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
-        }
-    }
-
-    // True if the property computes its value (expression body `=> expr` or any accessor with a
-    // body), as opposed to an auto-property (`{ get; }`, `{ get; private set; }`, `{ get; init; }`)
-    // -- including [Field] descriptors and OnInit-populated fields, which are actual descriptor data.
-    private static bool HasComputedGetter(IPropertySymbol property)
-    {
-        foreach (SyntaxReference reference in property.DeclaringSyntaxReferences)
-        {
-            if (reference.GetSyntax() is not PropertyDeclarationSyntax pds)
-                continue;
-            if (pds.ExpressionBody is not null)
-                return true;
-            if (pds.AccessorList is { } accessors)
-                foreach (AccessorDeclarationSyntax accessor in accessors.Accessors)
-                    if (accessor.Body is not null || accessor.ExpressionBody is not null)
-                        return true;
-        }
-        return false;
     }
 
     // Concrete method (by name + arity) implementing/overriding `callee` on `implType` or its base

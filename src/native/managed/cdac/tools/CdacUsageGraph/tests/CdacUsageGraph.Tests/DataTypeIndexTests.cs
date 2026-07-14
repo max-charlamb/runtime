@@ -1,7 +1,9 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using CdacUsageGraph.Analysis;
 using CdacUsageGraph.Discovery;
+using CdacUsageGraph.Model;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -130,5 +132,65 @@ public sealed class DataTypeIndexTests
         DataTypeIndex index = DataTypeIndex.Build(compilation);
 
         Assert.Equal("WidgetTable", index.DescriptorName(entry));
+    }
+
+    [Fact]
+    public void InterfaceComputedPropertyUsesSameProvenanceAsDirectRead()
+    {
+        const string source = """
+            namespace Microsoft.Diagnostics.DataContractReader
+            {
+                public sealed class CdacTypeAttribute : System.Attribute
+                {
+                    public CdacTypeAttribute(params string[] names) { }
+                }
+                public sealed class FieldAttribute : System.Attribute { }
+            }
+            namespace Microsoft.Diagnostics.DataContractReader.Data
+            {
+                public interface IData<T> { }
+                public interface IValue { int Value { get; } }
+
+                [Microsoft.Diagnostics.DataContractReader.CdacType("Computed")]
+                public sealed class Computed : IData<Computed>, IValue
+                {
+                    [Microsoft.Diagnostics.DataContractReader.Field] public int Raw { get; }
+                    public int Value => Raw;
+                }
+
+                [Microsoft.Diagnostics.DataContractReader.CdacType("Direct")]
+                public sealed class Direct : IData<Direct>, IValue
+                {
+                    [Microsoft.Diagnostics.DataContractReader.Field] public int Value { get; }
+                }
+            }
+            namespace Microsoft.Diagnostics.DataContractReader.Contracts
+            {
+                public sealed class TestContract
+                {
+                    public int Read(Microsoft.Diagnostics.DataContractReader.Data.IValue value)
+                        => value.Value;
+                }
+            }
+            """;
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            "InterfaceComputedPropertyTest",
+            [CSharpSyntaxTree.ParseText(source)],
+            RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        INamedTypeSymbol impl = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Contracts.TestContract")!;
+        DataTypeIndex index = DataTypeIndex.Build(compilation);
+        TypeInfoCorrelator correlator = TypeInfoCorrelator.Build(compilation);
+
+        UsageGraph graph = new UsageWalker(compilation, index, correlator).Walk(
+            [new ContractRegistration("ITest", "c1", impl)], "");
+
+        Assert.Contains("Raw", graph.FieldUsage[
+            (new ContractLabel("ITest", "c1"), "Data.Computed")].Keys);
+        Assert.DoesNotContain("Value", graph.FieldUsage[
+            (new ContractLabel("ITest", "c1"), "Data.Computed")].Keys);
+        Assert.Contains("Value", graph.FieldUsage[
+            (new ContractLabel("ITest", "c1"), "Data.Direct")].Keys);
     }
 }

@@ -21,20 +21,20 @@ public sealed class DataTypeIndex
     private readonly Dictionary<string, INamedTypeSymbol> _cdacNameToType;
     private readonly Dictionary<IPropertySymbol, string> _propertyNativeName;
     private readonly Dictionary<INamedTypeSymbol, string> _typeToDescriptorName;
-    private readonly Microsoft.CodeAnalysis.Compilation _compilation;
+    private readonly Dictionary<IPropertySymbol, DataPropertyInfo> _propertyInfo;
 
     private DataTypeIndex(
         HashSet<INamedTypeSymbol> dataTypes,
         Dictionary<string, INamedTypeSymbol> cdacNameToType,
         Dictionary<IPropertySymbol, string> propertyNativeName,
         Dictionary<INamedTypeSymbol, string> typeToDescriptorName,
-        Microsoft.CodeAnalysis.Compilation compilation)
+        Dictionary<IPropertySymbol, DataPropertyInfo> propertyInfo)
     {
         _dataTypes = dataTypes;
         _cdacNameToType = cdacNameToType;
         _propertyNativeName = propertyNativeName;
         _typeToDescriptorName = typeToDescriptorName;
-        _compilation = compilation;
+        _propertyInfo = propertyInfo;
     }
 
     public int Count => _dataTypes.Count;
@@ -47,62 +47,8 @@ public sealed class DataTypeIndex
     public bool IsField(IPropertySymbol property) =>
         _propertyNativeName.ContainsKey((IPropertySymbol)property.OriginalDefinition);
 
-    /// <summary>
-    /// True if a Data type's <c>OnInit</c> declares via <see cref="System.Diagnostics.CodeAnalysis.MemberNotNullAttribute"/>
-    /// that it initializes <paramref name="property"/>. Such properties are parsed/derived by
-    /// <c>OnInit</c> rather than being descriptor fields themselves; walking <c>OnInit</c> exposes
-    /// the actual fields on which they depend.
-    /// </summary>
-    public static bool IsInitializedByOnInit(IPropertySymbol property)
-    {
-        foreach (IMethodSymbol method in property.ContainingType.GetMembers("OnInit").OfType<IMethodSymbol>())
-        {
-            foreach (AttributeData attribute in method.GetAttributes())
-            {
-                if (attribute.AttributeClass?.ToDisplayString() !=
-                    "System.Diagnostics.CodeAnalysis.MemberNotNullAttribute")
-                    continue;
-
-                foreach (TypedConstant argument in attribute.ConstructorArguments)
-                {
-                    if (argument.Kind == TypedConstantKind.Array)
-                    {
-                        if (argument.Values.Any(v => v.Value is string name && name == property.Name))
-                            return true;
-                    }
-                    else if (argument.Value is string name && name == property.Name)
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    /// <summary>True if an explicit constructor assigns <paramref name="property"/>.</summary>
-    public bool IsInitializedByConstructor(IPropertySymbol property)
-    {
-        foreach (IMethodSymbol constructor in property.ContainingType.InstanceConstructors)
-        {
-            foreach (SyntaxReference reference in constructor.DeclaringSyntaxReferences)
-            {
-                SyntaxNode syntax = reference.GetSyntax();
-                SemanticModel model = _compilation.GetSemanticModel(syntax.SyntaxTree);
-                if (model.GetOperation(syntax) is not IOperation body)
-                    continue;
-                foreach (ISimpleAssignmentOperation assignment in
-                    body.DescendantsAndSelf().OfType<ISimpleAssignmentOperation>())
-                {
-                    if (assignment.Target is IPropertyReferenceOperation target &&
-                        SymbolEqualityComparer.Default.Equals(
-                            target.Property.OriginalDefinition, property.OriginalDefinition))
-                        return true;
-                }
-            }
-        }
-        return false;
-    }
+    internal DataPropertyInfo GetPropertyInfo(IPropertySymbol property) =>
+        _propertyInfo[(IPropertySymbol)property.OriginalDefinition];
 
     /// <summary>The discovered Data types that implement <paramref name="interfaceType"/>.</summary>
     public IEnumerable<INamedTypeSymbol> DataTypesImplementing(INamedTypeSymbol interfaceType)
@@ -142,6 +88,8 @@ public sealed class DataTypeIndex
         Dictionary<string, INamedTypeSymbol> cdacNameToType = new Dictionary<string, INamedTypeSymbol>(StringComparer.Ordinal);
         Dictionary<IPropertySymbol, string> propertyNativeName = new Dictionary<IPropertySymbol, string>(comparer);
         Dictionary<INamedTypeSymbol, string> typeToDescriptorName = new Dictionary<INamedTypeSymbol, string>(comparer);
+        Dictionary<IPropertySymbol, DataPropertyInfo> propertyInfo =
+            new Dictionary<IPropertySymbol, DataPropertyInfo>(comparer);
         HashSet<string> dataTypeNames = compilation.GetTypeByMetadataName(
             "Microsoft.Diagnostics.DataContractReader.DataType")?
             .GetMembers().OfType<IFieldSymbol>().Select(f => f.Name).ToHashSet(StringComparer.Ordinal)
@@ -190,8 +138,101 @@ public sealed class DataTypeIndex
         }
 
         VisitNamespace(compilation.Assembly.GlobalNamespace);
+
+        foreach (INamedTypeSymbol dataType in dataTypes)
+        {
+            foreach (IPropertySymbol property in dataType.GetMembers().OfType<IPropertySymbol>())
+                propertyInfo[property] = BuildPropertyInfo(property);
+        }
+
         return new DataTypeIndex(
-            dataTypes, cdacNameToType, propertyNativeName, typeToDescriptorName, compilation);
+            dataTypes, cdacNameToType, propertyNativeName, typeToDescriptorName, propertyInfo);
+
+        DataPropertyInfo BuildPropertyInfo(IPropertySymbol property)
+        {
+            IPropertySymbol definition = (IPropertySymbol)property.OriginalDefinition;
+            if (propertyNativeName.TryGetValue(definition, out string? nativeName))
+                return new DataPropertyInfo(DataPropertyKind.DirectField, nativeName, []);
+
+            if (HasComputedGetter(definition))
+                return new DataPropertyInfo(DataPropertyKind.Computed, property.Name, [definition]);
+
+            List<ISymbol> onInitMembers = OnInitMembersInitializing(definition);
+            if (onInitMembers.Count > 0)
+                return new DataPropertyInfo(DataPropertyKind.OnInitDerived, property.Name, onInitMembers);
+
+            List<ISymbol> constructors = ConstructorsInitializing(definition);
+            if (constructors.Count > 0)
+                return new DataPropertyInfo(DataPropertyKind.ConstructorDerived, property.Name, constructors);
+
+            // An auto-property populated directly by generated code or OnInit without a derived
+            // provenance marker (e.g. Thread.ThreadHandle / ObjectHandle.Handle) is actual
+            // descriptor data and is recorded by its property name.
+            return new DataPropertyInfo(DataPropertyKind.DirectField, property.Name, []);
+        }
+
+        static bool HasComputedGetter(IPropertySymbol property)
+        {
+            foreach (SyntaxReference reference in property.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is not Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax declaration)
+                    continue;
+                if (declaration.ExpressionBody is not null)
+                    return true;
+                if (declaration.AccessorList is { } accessors &&
+                    accessors.Accessors.Any(a => a.Body is not null || a.ExpressionBody is not null))
+                    return true;
+            }
+            return false;
+        }
+
+        static List<ISymbol> OnInitMembersInitializing(IPropertySymbol property)
+        {
+            List<ISymbol> members = new();
+            foreach (IMethodSymbol method in property.ContainingType.GetMembers("OnInit").OfType<IMethodSymbol>())
+            {
+                foreach (AttributeData attribute in method.GetAttributes())
+                {
+                    if (attribute.AttributeClass?.ToDisplayString() !=
+                        "System.Diagnostics.CodeAnalysis.MemberNotNullAttribute")
+                        continue;
+                    if (attribute.ConstructorArguments.Any(a => ContainsPropertyName(a, property.Name)))
+                    {
+                        members.Add(method.OriginalDefinition);
+                        break;
+                    }
+                }
+            }
+            return members;
+        }
+
+        static bool ContainsPropertyName(TypedConstant argument, string propertyName) =>
+            argument.Kind == TypedConstantKind.Array
+                ? argument.Values.Any(v => v.Value is string name && name == propertyName)
+                : argument.Value is string name && name == propertyName;
+
+        List<ISymbol> ConstructorsInitializing(IPropertySymbol property)
+        {
+            List<ISymbol> constructors = new();
+            foreach (IMethodSymbol constructor in property.ContainingType.InstanceConstructors)
+            {
+                foreach (SyntaxReference reference in constructor.DeclaringSyntaxReferences)
+                {
+                    SyntaxNode syntax = reference.GetSyntax();
+                    SemanticModel model = compilation.GetSemanticModel(syntax.SyntaxTree);
+                    if (model.GetOperation(syntax) is not IOperation body)
+                        continue;
+                    if (body.DescendantsAndSelf().OfType<ISimpleAssignmentOperation>().Any(
+                        assignment => assignment.Target is IPropertyReferenceOperation target &&
+                            comparer.Equals(target.Property.OriginalDefinition, property.OriginalDefinition)))
+                    {
+                        constructors.Add(constructor.OriginalDefinition);
+                        break;
+                    }
+                }
+            }
+            return constructors;
+        }
     }
 
     // Highest-priority explicit candidate name from [Field]/[FieldAddress], else the property name.
