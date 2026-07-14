@@ -51,7 +51,7 @@ public sealed class UsageWalker
                 continue;
 
             foreach (IOperation body in GetMemberOperations(item.Member))
-                new BodyWalker(this, item.Label, item.Subst).Visit(body);
+                new BodyWalker(this, item.Member, item.Label, item.Subst).Visit(body);
         }
 
         List<RegistrationInfo> regInfo = registrations
@@ -233,6 +233,33 @@ public sealed class UsageWalker
         ITypeSymbol r = Resolve(to.TypeOperand, subst);
         if (_index.IsDataType(r))
             RecordType(label, r);
+    }
+
+    // IData's generated Write<Property> methods are absent from the manual analysis compilation,
+    // so Roslyn represents calls such as WriteState(0) as invalid invocation syntax. Recover the
+    // intended write when the reached member belongs to a Data type and the suffix names a real
+    // descriptor field.
+    private void HandleInvalid(IInvalidOperation invalid, ISymbol containingMember, ContractLabel label)
+    {
+        if (invalid.Syntax is not InvocationExpressionSyntax invocation)
+            return;
+
+        string? methodName = invocation.Expression switch
+        {
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+            MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
+            _ => null,
+        };
+        if (methodName is null || !methodName.StartsWith("Write", StringComparison.Ordinal) ||
+            containingMember.ContainingType is not INamedTypeSymbol dataType ||
+            !_index.IsDataType(dataType))
+            return;
+
+        string propertyName = methodName.Substring("Write".Length);
+        IPropertySymbol? property = dataType.GetMembers(propertyName).OfType<IPropertySymbol>()
+            .FirstOrDefault(_index.IsField);
+        if (property is not null)
+            RecordField(label, dataType, _index.NativeName(property), UsageKind.Write);
     }
 
     // ---- recording helpers -----------------------------------------------------------------
@@ -433,7 +460,11 @@ public sealed class UsageWalker
         Dictionary<ITypeParameterSymbol, ITypeSymbol> Subst);
 
     /// <summary>Depth-first per-body walker; dispatches back to the owning <see cref="UsageWalker"/>.</summary>
-    private sealed class BodyWalker(UsageWalker owner, ContractLabel label, Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
+    private sealed class BodyWalker(
+        UsageWalker owner,
+        ISymbol containingMember,
+        ContractLabel label,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
         : OperationWalker
     {
         public override void VisitInvocation(IInvocationOperation op)
@@ -458,6 +489,12 @@ public sealed class UsageWalker
         {
             owner.HandleTypeOf(op, label, subst);
             base.VisitTypeOf(op);
+        }
+
+        public override void VisitInvalid(IInvalidOperation op)
+        {
+            owner.HandleInvalid(op, containingMember, label);
+            base.VisitInvalid(op);
         }
     }
 

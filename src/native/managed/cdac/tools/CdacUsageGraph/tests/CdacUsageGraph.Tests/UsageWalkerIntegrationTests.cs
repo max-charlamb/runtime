@@ -190,6 +190,23 @@ public sealed class UsageWalkerIntegrationTests
         Assert.Contains("SHash", graph.ContractsUsed[new ContractLabel("ILoader", "c1")]);
     }
 
+    [Fact]
+    public void CapturesGeneratedWritableFieldMethods()
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+        UsageGraph graph = built!.Value.Graph;
+
+        Assert.True(graph.FieldUsage.TryGetValue(
+            (new ContractLabel("ICodeNotifications", "c1"), "Data.JITNotification"),
+            out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? fields));
+        foreach (string field in new[] { "ClrModule", "MethodToken", "State" })
+        {
+            Assert.True(fields!.TryGetValue(field, out IReadOnlyCollection<UsageKind>? kinds));
+            Assert.Contains(UsageKind.Write, kinds!);
+        }
+    }
+
     private static HashSet<string> DataTypesUsed(UsageGraph graph, ContractLabel label) =>
         graph.FieldUsage.Keys.Where(k => k.Label == label).Select(k => k.DataType).ToHashSet();
 }

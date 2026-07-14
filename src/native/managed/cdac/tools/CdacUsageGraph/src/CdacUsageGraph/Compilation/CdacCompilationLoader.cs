@@ -17,6 +17,21 @@ namespace CdacUsageGraph.Compilation;
 /// </summary>
 public sealed class CdacCompilationLoader
 {
+    // The manual compilation intentionally omits the IData source generator. Keep the expected
+    // error surface explicit: a new/missing diagnostic means the semantic model changed and the
+    // analysis could silently under-report, so CI should require this baseline to be reviewed.
+    private static readonly Dictionary<string, int> s_expectedErrorCounts =
+        new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["CS0103"] = 6,   // Generated Write<Property> method is not in the current context.
+            ["CS0117"] = 1,   // Generated static Data member is absent.
+            ["CS0535"] = 188, // IData<T>.Create implementations are generated.
+            ["CS0759"] = 29,  // OnInit partial definitions are generated.
+            ["CS1061"] = 45,  // Generated members/constructors are absent.
+            ["CS1729"] = 4,   // Generated Data constructors are absent.
+            ["CS8795"] = 3,   // Required partial method implementations are generated.
+        };
+
     private static readonly string[] s_projects =
     [
         "Microsoft.Diagnostics.DataContractReader.Abstractions",
@@ -73,7 +88,7 @@ public sealed class CdacCompilationLoader
             .Select(f => CSharpSyntaxTree.ParseText(File.ReadAllText(f), parseOptions, path: f))
             .ToList();
 
-        return CSharpCompilation.Create(
+        CSharpCompilation compilation = CSharpCompilation.Create(
             "CdacUsageAnalysis",
             trees,
             GetRuntimeReferences(),
@@ -81,6 +96,30 @@ public sealed class CdacCompilationLoader
                 OutputKind.DynamicallyLinkedLibrary,
                 allowUnsafe: true,
                 nullableContextOptions: NullableContextOptions.Enable));
+        ValidateExpectedDiagnostics(compilation);
+        return compilation;
+    }
+
+    private static void ValidateExpectedDiagnostics(CSharpCompilation compilation)
+    {
+        Dictionary<string, int> actual = compilation.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .GroupBy(d => d.Id)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+        if (actual.Count == s_expectedErrorCounts.Count &&
+            actual.All(kv => s_expectedErrorCounts.TryGetValue(kv.Key, out int expected) && expected == kv.Value))
+            return;
+
+        static string Format(IEnumerable<KeyValuePair<string, int>> counts) =>
+            string.Join(", ", counts.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"));
+
+        throw new InvalidOperationException(
+            "The cDAC analysis compilation diagnostic baseline changed. Because compilation errors " +
+            "can degrade Roslyn operations and silently under-report usage, review the diagnostics " +
+            "and update CdacCompilationLoader only if the change is expected." + Environment.NewLine +
+            "Expected: " + Format(s_expectedErrorCounts) + Environment.NewLine +
+            "Actual:   " + Format(actual));
     }
 
     // Reference assemblies for the compilation: the trusted-platform-assembly set of the runtime
