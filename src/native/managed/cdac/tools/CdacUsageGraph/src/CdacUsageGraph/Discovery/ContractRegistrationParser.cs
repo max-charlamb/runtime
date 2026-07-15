@@ -43,13 +43,13 @@ internal static class ContractRegistrationParser
                     if (inv.TargetMethod.Name != CdacSymbols.ContractRegistrationMethodName)
                         continue;
                     if (inv.Instance?.Type is not INamedTypeSymbol receiver ||
-                        !IsOrInheritsFrom(receiver, contractRegistry, comparer))
+                        !IsAssignableTo(compilation, receiver, contractRegistry))
                         continue;
                     if (inv.TargetMethod.TypeArguments.Length != 1)
                         continue;
                     if (inv.TargetMethod.TypeArguments[0] is not INamedTypeSymbol iface)
                         continue;
-                    if (!ImplementsOrEquals(iface, iContract, comparer))
+                    if (!IsAssignableTo(compilation, iface, iContract))
                         continue;
 
                     string? version = inv.Arguments
@@ -64,8 +64,8 @@ internal static class ContractRegistrationParser
                     {
                         if (create.Type is INamedTypeSymbol impl &&
                             comparer.Equals(impl.ContainingAssembly, compilation.Assembly) &&
-                            ImplementsOrEquals(impl, iface, comparer) &&
-                            ImplementsOrEquals(impl, iContract, comparer))
+                            IsAssignableTo(compilation, impl, iface) &&
+                            IsAssignableTo(compilation, impl, iContract))
                         {
                             registrations.Add(new ContractRegistration(iface.Name, version, impl));
                         }
@@ -81,24 +81,17 @@ internal static class ContractRegistrationParser
             .ToList();
     }
 
-    private static bool IsOrInheritsFrom(
-        INamedTypeSymbol type,
-        INamedTypeSymbol expectedBase,
-        SymbolEqualityComparer comparer)
+    // Roslyn's implicit conversion classification covers identity, class inheritance, interface
+    // inheritance, and class-to-implemented-interface conversion. It is more complete than
+    // manually comparing BaseType and AllInterfaces, including generic/variance cases.
+    private static bool IsAssignableTo(
+        Microsoft.CodeAnalysis.Compilation compilation,
+        ITypeSymbol source,
+        ITypeSymbol target)
     {
-        for (INamedTypeSymbol? current = type; current is not null; current = current.BaseType)
-        {
-            if (comparer.Equals(current.OriginalDefinition, expectedBase.OriginalDefinition))
-                return true;
-        }
-        return false;
-    }
+        if (compilation is not Microsoft.CodeAnalysis.CSharp.CSharpCompilation csharpCompilation)
+            throw new InvalidOperationException("cDAC contract registration analysis requires a C# compilation.");
 
-    private static bool ImplementsOrEquals(
-        INamedTypeSymbol type,
-        INamedTypeSymbol expectedInterface,
-        SymbolEqualityComparer comparer) =>
-        comparer.Equals(type.OriginalDefinition, expectedInterface.OriginalDefinition) ||
-        type.AllInterfaces.Any(i =>
-            comparer.Equals(i.OriginalDefinition, expectedInterface.OriginalDefinition));
+        return csharpCompilation.ClassifyConversion(source, target).IsImplicit;
+    }
 }
