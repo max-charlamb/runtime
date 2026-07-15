@@ -40,10 +40,19 @@ public sealed class DataTypeIndexTests
                 [Microsoft.Diagnostics.DataContractReader.Field("m_value")] public int Value { get; }
                 [Microsoft.Diagnostics.DataContractReader.Field] public int Count { get; }
             }
+
+            [Microsoft.Diagnostics.DataContractReader.CdacType("NotData")]
+            public sealed class NotData { }
+        }
+        namespace Unrelated
+        {
+            public interface IData<T> { }
+
+            public sealed class Lookalike : IData<Lookalike> { }
         }
         """;
 
-    private static (Microsoft.CodeAnalysis.Compilation Compilation, INamedTypeSymbol Widget) BuildWidget()
+    private static (CSharpCompilation Compilation, INamedTypeSymbol Widget) BuildWidget()
     {
         CSharpCompilation compilation = CSharpCompilation.Create(
             "DataTypeIndexTest",
@@ -69,11 +78,15 @@ public sealed class DataTypeIndexTests
     [Fact]
     public void DiscoversCdacTypeDataTypes()
     {
-        (Microsoft.CodeAnalysis.Compilation compilation, INamedTypeSymbol widget) = BuildWidget();
+        (CSharpCompilation compilation, INamedTypeSymbol widget) = BuildWidget();
 
         DataTypeIndex index = DataTypeIndex.Build(compilation);
 
         Assert.True(index.IsDataType(widget));
+        Assert.False(index.IsDataType(compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Data.NotData")));
+        Assert.False(index.IsDataType(compilation.GetTypeByMetadataName(
+            "Unrelated.Lookalike")));
         Assert.Equal(1, index.Count);
     }
 
@@ -82,22 +95,23 @@ public sealed class DataTypeIndexTests
     [InlineData("Count", "Count")]    // [Field] with no explicit name -> property name
     public void ResolvesNativeFieldName(string property, string expectedNative)
     {
-        (Microsoft.CodeAnalysis.Compilation compilation, INamedTypeSymbol widget) = BuildWidget();
+        (CSharpCompilation compilation, INamedTypeSymbol widget) = BuildWidget();
         DataTypeIndex index = DataTypeIndex.Build(compilation);
 
         IPropertySymbol symbol = (IPropertySymbol)widget.GetMembers(property).Single();
 
-        Assert.Equal(expectedNative, index.NativeName(symbol));
+        Assert.True(index.TryGetDataType(widget, out DataTypeInfo dataType));
+        Assert.Equal(expectedNative, dataType.GetProperty(symbol).NativeName);
     }
 
     [Fact]
     public void ResolvesDescriptorNameToDataClass()
     {
-        (Microsoft.CodeAnalysis.Compilation compilation, INamedTypeSymbol widget) = BuildWidget();
+        (CSharpCompilation compilation, INamedTypeSymbol widget) = BuildWidget();
         DataTypeIndex index = DataTypeIndex.Build(compilation);
 
-        Assert.True(index.TryGetType("Widget", out INamedTypeSymbol resolved));
-        Assert.Equal(widget, resolved, SymbolEqualityComparer.Default);
+        Assert.True(index.TryGetType("Widget", out DataTypeInfo resolved));
+        Assert.Equal(widget, resolved.Symbol, SymbolEqualityComparer.Default);
     }
 
     [Fact]
@@ -131,7 +145,45 @@ public sealed class DataTypeIndexTests
 
         DataTypeIndex index = DataTypeIndex.Build(compilation);
 
-        Assert.Equal("WidgetTable", index.DescriptorName(entry));
+        Assert.True(index.TryGetDataType(entry, out DataTypeInfo dataType));
+        Assert.Equal("WidgetTable", dataType.DescriptorName);
+    }
+
+    [Fact]
+    public void DataTypeInfoIncludesInheritedProperties()
+    {
+        const string source = """
+            namespace Microsoft.Diagnostics.DataContractReader
+            {
+                public sealed class FieldAttribute : System.Attribute { }
+            }
+            namespace Microsoft.Diagnostics.DataContractReader.Data
+            {
+                public interface IData<T> { }
+
+                public class Base
+                {
+                    [Microsoft.Diagnostics.DataContractReader.Field] public int Value { get; }
+                }
+
+                public sealed class Derived : Base, IData<Derived> { }
+            }
+            """;
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            "InheritedDataPropertyTest",
+            [CSharpSyntaxTree.ParseText(source)],
+            RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        INamedTypeSymbol derived = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Data.Derived")!;
+        IPropertySymbol baseValue = (IPropertySymbol)compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Data.Base")!
+            .GetMembers("Value").Single();
+
+        DataTypeIndex index = DataTypeIndex.Build(compilation);
+
+        Assert.True(index.TryGetDataType(derived, out DataTypeInfo dataType));
+        Assert.Equal("Value", dataType.GetProperty(baseValue).NativeName);
     }
 
     [Fact]

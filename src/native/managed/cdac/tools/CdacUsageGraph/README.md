@@ -89,7 +89,7 @@ CdacUsageGraph/                        # tool root (part of the Arcade build)
 │   └── CdacUsageGraph/                # the tool (Exe): thin Program.cs + all analysis logic
 │       ├── AnalysisOptions.cs, AnalysisPipeline.cs, Commands.cs, Locator.cs, Program.cs
 │       ├── Compilation/               # CdacWorkspaceLoader / MSBuildWorkspace (phase A)
-│       ├── Discovery/                 # DataTypeIndex, ContractRegistrationParser, TypeInfoCorrelator (phase B)
+│       ├── Discovery/                 # DataTypeInfo/Index, ContractRegistrationParser, TypeInfoCorrelator (phase B)
 │       ├── Analysis/                  # UsageWalker (OperationWalker), UsageCollector, OperationInspector (phase C/D)
 │       ├── Model/                     # UsageGraph, RegistrationInfo (immutable result)
 │       ├── Reporting/                 # IReportWriter + Markdown/JSON writers (phase E)

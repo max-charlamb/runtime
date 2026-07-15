@@ -19,6 +19,7 @@ internal enum DataPropertyKind
 /// properties expand to the members that parse/compute their actual descriptor dependencies.
 /// </summary>
 internal sealed record DataPropertyInfo(
+    IPropertySymbol Symbol,
     DataPropertyKind Kind,
     string NativeName,
     IReadOnlyList<ISymbol> ExpansionMembers);

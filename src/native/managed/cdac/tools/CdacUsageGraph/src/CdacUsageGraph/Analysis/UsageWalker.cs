@@ -112,7 +112,7 @@ internal sealed class UsageWalker
 
         foreach (string dataTypeName in _correlator.GetTypeInfoDataNames(typeInfoArgument.Value))
         {
-            string dataName = _index.TryGetType(dataTypeName, out INamedTypeSymbol dataType)
+            string dataName = _index.TryGetType(dataTypeName, out DataTypeInfo dataType)
                 ? DataName(dataType)
                 : "Data." + dataTypeName;
             _collector.RecordField(label, dataName, fieldName, UsageKind.Read);
@@ -141,7 +141,7 @@ internal sealed class UsageWalker
         ISymbol containingMember,
         ContractLabel label)
     {
-        if (_index.IsDataType(pr.Property.ContainingType))
+        if (_index.TryGetDataType(pr.Property.ContainingType, out DataTypeInfo directDataType))
         {
             UsageKind kind = OperationInspector.ClassifyPropertyRef(pr);
             if (kind == UsageKind.Write &&
@@ -154,7 +154,7 @@ internal sealed class UsageWalker
             }
             HandleDataProperty(
                 pr.Property,
-                pr.Property.ContainingType!,
+                directDataType,
                 kind,
                 label);
         }
@@ -166,10 +166,10 @@ internal sealed class UsageWalker
             // every implementing Data type whose implementation of this member is an actual [Field]
             // (computed/pass-through properties map to no descriptor field and are skipped).
             UsageKind kind = OperationInspector.ClassifyPropertyRef(pr);
-            foreach (INamedTypeSymbol dt in _index.DataTypesImplementing(iface))
+            foreach (DataTypeInfo dataType in _index.DataTypesImplementing(iface))
             {
-                if (dt.FindImplementationForInterfaceMember(pr.Property.OriginalDefinition) is IPropertySymbol impl)
-                    HandleDataProperty(impl, dt, kind, label);
+                if (dataType.Symbol.FindImplementationForInterfaceMember(pr.Property.OriginalDefinition) is IPropertySymbol impl)
+                    HandleDataProperty(impl, dataType, kind, label);
             }
         }
         else if (pr.Property.ContainingType?.Name == "ContractRegistry")
@@ -190,7 +190,7 @@ internal sealed class UsageWalker
                 // GetTypeInfo(DataType.X).Fields["nativeName"] -- a raw-string/constant field-offset lookup.
                 foreach (string dataTypeName in dataTypeNames)
                 {
-                    string dataName = _index.TryGetType(dataTypeName, out INamedTypeSymbol dataType)
+                    string dataName = _index.TryGetType(dataTypeName, out DataTypeInfo dataType)
                         ? DataName(dataType)
                         : "Data." + dataTypeName;
                     _collector.RecordField(label, dataName, keyName, UsageKind.OffsetLookup);
@@ -202,7 +202,7 @@ internal sealed class UsageWalker
                 // GetTypeInfo(DataType.X).Size -- the contract depends on the descriptor's overall size.
                 foreach (string dataTypeName in dataTypeNames)
                 {
-                    string dataName = _index.TryGetType(dataTypeName, out INamedTypeSymbol dataType)
+                    string dataName = _index.TryGetType(dataTypeName, out DataTypeInfo dataType)
                         ? DataName(dataType)
                         : "Data." + dataTypeName;
                     _collector.RecordField(label, dataName, "Size", UsageKind.Read);
@@ -213,11 +213,11 @@ internal sealed class UsageWalker
 
     private void HandleDataProperty(
         IPropertySymbol property,
-        INamedTypeSymbol dataType,
+        DataTypeInfo dataType,
         UsageKind kind,
         ContractLabel label)
     {
-        DataPropertyInfo info = _index.GetPropertyInfo(property);
+        DataPropertyInfo info = dataType.GetProperty(property);
         if (info.Kind == DataPropertyKind.DirectField)
         {
             RecordField(label, dataType, info.NativeName, kind);
@@ -244,11 +244,22 @@ internal sealed class UsageWalker
 
     // ---- recording helpers -----------------------------------------------------------------
 
-    private string DataName(ITypeSymbol t) => "Data." + _index.DescriptorName(t);
+    private static string DataName(DataTypeInfo type) => "Data." + type.DescriptorName;
 
-    private void RecordType(ContractLabel label, ITypeSymbol t) => _collector.RecordType(label, DataName(t));
+    private void RecordType(ContractLabel label, ITypeSymbol t) =>
+        _collector.RecordType(label, _index.TryGetDataType(t, out DataTypeInfo info) ? DataName(info) : "Data." + t.Name);
+
+    private void RecordType(ContractLabel label, DataTypeInfo type) =>
+        _collector.RecordType(label, DataName(type));
 
     private void RecordField(ContractLabel label, ITypeSymbol dataType, string field, UsageKind kind) =>
+        _collector.RecordField(
+            label,
+            _index.TryGetDataType(dataType, out DataTypeInfo info) ? DataName(info) : "Data." + dataType.Name,
+            field,
+            kind);
+
+    private void RecordField(ContractLabel label, DataTypeInfo dataType, string field, UsageKind kind) =>
         _collector.RecordField(label, DataName(dataType), field, kind);
 
     // ---- member enumeration & body resolution ----------------------------------------------

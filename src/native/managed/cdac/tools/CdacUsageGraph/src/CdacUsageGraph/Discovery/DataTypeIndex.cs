@@ -2,264 +2,104 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Operations;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace CdacUsageGraph.Discovery;
 
 /// <summary>
-/// Phase B (part 1): the immutable index of Data types discovered in the compilation:
-/// which types are <c>[CdacType]</c>/<c>IData&lt;T&gt;</c>, each descriptor field's native name,
-/// and the map from descriptor name to Data class (for <c>Fields["..."]</c> correlation).
+/// Phase B (part 1): lookup index over the discovered <see cref="DataTypeInfo"/> objects.
+/// Detection requires the real <c>IData&lt;TSelf&gt;</c> contract; descriptor aliases and property
+/// provenance are owned by each <see cref="DataTypeInfo"/>, not parallel index dictionaries.
 /// </summary>
 internal sealed class DataTypeIndex
 {
-    private readonly HashSet<INamedTypeSymbol> _dataTypes;
-    private readonly Dictionary<string, INamedTypeSymbol> _cdacNameToType;
-    private readonly Dictionary<IPropertySymbol, string> _propertyNativeName;
-    private readonly Dictionary<INamedTypeSymbol, string> _typeToDescriptorName;
-    private readonly Dictionary<IPropertySymbol, DataPropertyInfo> _propertyInfo;
+    private readonly Dictionary<INamedTypeSymbol, DataTypeInfo> _typesBySymbol;
+    private readonly Dictionary<string, DataTypeInfo> _typesByDescriptorName;
 
     private DataTypeIndex(
-        HashSet<INamedTypeSymbol> dataTypes,
-        Dictionary<string, INamedTypeSymbol> cdacNameToType,
-        Dictionary<IPropertySymbol, string> propertyNativeName,
-        Dictionary<INamedTypeSymbol, string> typeToDescriptorName,
-        Dictionary<IPropertySymbol, DataPropertyInfo> propertyInfo)
+        Dictionary<INamedTypeSymbol, DataTypeInfo> typesBySymbol,
+        Dictionary<string, DataTypeInfo> typesByDescriptorName)
     {
-        _dataTypes = dataTypes;
-        _cdacNameToType = cdacNameToType;
-        _propertyNativeName = propertyNativeName;
-        _typeToDescriptorName = typeToDescriptorName;
-        _propertyInfo = propertyInfo;
+        _typesBySymbol = typesBySymbol;
+        _typesByDescriptorName = typesByDescriptorName;
     }
 
-    public int Count => _dataTypes.Count;
+    public int Count => _typesBySymbol.Count;
 
-    /// <summary>True if <paramref name="t"/> is one of the discovered Data types.</summary>
-    public bool IsDataType(ITypeSymbol? t) =>
-        t is INamedTypeSymbol n && _dataTypes.Contains(n.OriginalDefinition);
+    public IEnumerable<DataTypeInfo> Types => _typesBySymbol.Values;
 
-    /// <summary>True if <paramref name="property"/> is a <c>[Field]</c>/<c>[FieldAddress]</c> descriptor property.</summary>
-    public bool IsField(IPropertySymbol property) =>
-        _propertyNativeName.ContainsKey((IPropertySymbol)property.OriginalDefinition);
+    public bool TryGetDataType(ITypeSymbol? symbol, out DataTypeInfo info)
+    {
+        if (symbol is INamedTypeSymbol named)
+            return _typesBySymbol.TryGetValue(named.OriginalDefinition, out info!);
 
-    internal DataPropertyInfo GetPropertyInfo(IPropertySymbol property) =>
-        _propertyInfo[(IPropertySymbol)property.OriginalDefinition];
+        info = null!;
+        return false;
+    }
+
+    public bool IsDataType(ITypeSymbol? symbol) => TryGetDataType(symbol, out _);
+
+    /// <summary>Resolves a native descriptor name from <c>GetTypeInfo(DataType.X)</c>.</summary>
+    public bool TryGetType(string descriptorName, out DataTypeInfo info) =>
+        _typesByDescriptorName.TryGetValue(descriptorName, out info!);
 
     /// <summary>The discovered Data types that implement <paramref name="interfaceType"/>.</summary>
-    public IEnumerable<INamedTypeSymbol> DataTypesImplementing(INamedTypeSymbol interfaceType)
-    {
-        INamedTypeSymbol iface = interfaceType.OriginalDefinition;
-        foreach (INamedTypeSymbol dt in _dataTypes)
-            if (dt.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i.OriginalDefinition, iface)))
-                yield return dt;
-    }
+    public IEnumerable<DataTypeInfo> DataTypesImplementing(INamedTypeSymbol interfaceType) =>
+        _typesBySymbol.Values.Where(info =>
+            info.Symbol.AllInterfaces.Any(i =>
+                SymbolEqualityComparer.Default.Equals(
+                    i.OriginalDefinition, interfaceType.OriginalDefinition)));
 
-    /// <summary>Resolves a descriptor name (from <c>GetTypeInfo(DataType.X)</c>) to a Data class.</summary>
-    public bool TryGetType(string cdacName, out INamedTypeSymbol type) =>
-        _cdacNameToType.TryGetValue(cdacName, out type!);
-
-    /// <summary>The native descriptor name for a <c>[Field]</c> property, else the property name.</summary>
-    public string NativeName(IPropertySymbol property) =>
-        _propertyNativeName.TryGetValue((IPropertySymbol)property.OriginalDefinition, out string? n)
-            ? n
-            : property.Name;
-
-    /// <summary>
-    /// The native DataType descriptor name for a Data class. This differs from the C# class name
-    /// for adapter types such as <c>DynamicILBlobEntry</c> (descriptor
-    /// <c>DynamicILBlobTable</c>) and <c>GCHeapSVR</c> (descriptor <c>GCHeap</c>).
-    /// </summary>
-    public string DescriptorName(ITypeSymbol type) =>
-        type is INamedTypeSymbol named &&
-        _typeToDescriptorName.TryGetValue(named.OriginalDefinition, out string? descriptorName)
-            ? descriptorName
-            : type.Name;
-
-    /// <summary>Builds the index by scanning every type in the compilation's assembly.</summary>
-    public static DataTypeIndex Build(Microsoft.CodeAnalysis.Compilation compilation)
+    /// <summary>Builds the index by scanning every class in the generated Contracts compilation.</summary>
+    public static DataTypeIndex Build(CSharpCompilation compilation)
     {
         SymbolEqualityComparer comparer = SymbolEqualityComparer.Default;
-        HashSet<INamedTypeSymbol> dataTypes = new HashSet<INamedTypeSymbol>(comparer);
-        Dictionary<string, INamedTypeSymbol> cdacNameToType = new Dictionary<string, INamedTypeSymbol>(StringComparer.Ordinal);
-        Dictionary<IPropertySymbol, string> propertyNativeName = new Dictionary<IPropertySymbol, string>(comparer);
-        Dictionary<INamedTypeSymbol, string> typeToDescriptorName = new Dictionary<INamedTypeSymbol, string>(comparer);
-        Dictionary<IPropertySymbol, DataPropertyInfo> propertyInfo =
-            new Dictionary<IPropertySymbol, DataPropertyInfo>(comparer);
-        HashSet<string> dataTypeNames = compilation.GetTypeByMetadataName(
+        INamedTypeSymbol? iDataDefinition = compilation.GetTypeByMetadataName(CdacSymbols.IDataMetadataName);
+        if (iDataDefinition is null)
+            throw new InvalidOperationException($"Could not resolve {CdacSymbols.IDataMetadataName}.");
+
+        HashSet<string> descriptorEnumNames = compilation.GetTypeByMetadataName(
             CdacSymbols.DataTypeMetadataName)?
-            .GetMembers().OfType<IFieldSymbol>().Select(f => f.Name).ToHashSet(StringComparer.Ordinal)
+            .GetMembers().OfType<IFieldSymbol>()
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal)
             ?? new HashSet<string>(StringComparer.Ordinal);
+        Dictionary<INamedTypeSymbol, DataTypeInfo> typesBySymbol =
+            new Dictionary<INamedTypeSymbol, DataTypeInfo>(comparer);
+        Dictionary<string, DataTypeInfo> typesByDescriptorName =
+            new Dictionary<string, DataTypeInfo>(StringComparer.Ordinal);
 
-        void VisitType(INamedTypeSymbol t)
+        foreach (INamedTypeSymbol candidate in EnumerateAllTypes(compilation.Assembly.GlobalNamespace))
         {
-            bool isData =
-                t.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == CdacSymbols.CdacTypeAttributeMetadataName) ||
-                t.AllInterfaces.Any(i => i.Name == "IData");
-            if (isData)
-            {
-                dataTypes.Add(t);
-                typeToDescriptorName[t] = t.Name;
-                foreach (IPropertySymbol m in t.GetMembers().OfType<IPropertySymbol>())
-                {
-                    if (m.GetAttributes().Any(a =>
-                            a.AttributeClass?.ToDisplayString() is
-                                CdacSymbols.FieldAttributeMetadataName or
-                                CdacSymbols.FieldAddressAttributeMetadataName or
-                                CdacSymbols.RawOffsetAttributeMetadataName))
-                        propertyNativeName[m] = FieldNativeName(m);
-                }
+            if (candidate.TypeKind != TypeKind.Class ||
+                !compilation.IsAssignableTo(candidate, iDataDefinition.Construct(candidate)))
+                continue;
 
-                cdacNameToType.TryAdd(t.Name, t);
-                AttributeData? cd = t.GetAttributes().FirstOrDefault(
-                    a => a.AttributeClass?.ToDisplayString() == CdacSymbols.CdacTypeAttributeMetadataName);
-                if (cd is { ConstructorArguments.Length: > 0 })
-                {
-                    foreach (TypedConstant v in cd.ConstructorArguments[0].Values)
-                        if (v.Value is string s)
-                        {
-                            cdacNameToType[s] = t;
-                            if (dataTypeNames.Contains(s) && typeToDescriptorName[t] == t.Name)
-                                typeToDescriptorName[t] = s;
-                        }
-                }
-            }
-
-            foreach (INamedTypeSymbol nested in t.GetTypeMembers())
-                VisitType(nested);
+            DataTypeInfo info = DataTypeInfo.Create(
+                compilation, candidate, descriptorEnumNames, comparer);
+            typesBySymbol.Add(candidate, info);
+            typesByDescriptorName.TryAdd(candidate.Name, info);
+            typesByDescriptorName[info.DescriptorName] = info;
         }
 
-        void VisitNamespace(INamespaceSymbol ns)
-        {
-            foreach (INamedTypeSymbol t in ns.GetTypeMembers())
-                VisitType(t);
-            foreach (INamespaceSymbol child in ns.GetNamespaceMembers())
-                VisitNamespace(child);
-        }
-
-        VisitNamespace(compilation.Assembly.GlobalNamespace);
-
-        foreach (INamedTypeSymbol dataType in dataTypes)
-        {
-            foreach (IPropertySymbol property in dataType.GetMembers().OfType<IPropertySymbol>())
-                propertyInfo[property] = BuildPropertyInfo(property);
-        }
-
-        return new DataTypeIndex(
-            dataTypes, cdacNameToType, propertyNativeName, typeToDescriptorName, propertyInfo);
-
-        DataPropertyInfo BuildPropertyInfo(IPropertySymbol property)
-        {
-            IPropertySymbol definition = (IPropertySymbol)property.OriginalDefinition;
-            if (propertyNativeName.TryGetValue(definition, out string? nativeName))
-                return new DataPropertyInfo(DataPropertyKind.DirectField, nativeName, []);
-
-            if (definition.GetAttributes().Any(
-                a => a.AttributeClass?.ToDisplayString() == CdacSymbols.InstanceDataStartAttributeMetadataName))
-                return new DataPropertyInfo(DataPropertyKind.TypeSize, "Size", []);
-
-            if (HasComputedGetter(definition))
-                return new DataPropertyInfo(DataPropertyKind.Computed, property.Name, [definition]);
-
-            List<ISymbol> onInitMembers = OnInitMembersInitializing(definition);
-            if (onInitMembers.Count > 0)
-                return new DataPropertyInfo(DataPropertyKind.OnInitDerived, property.Name, onInitMembers);
-
-            List<ISymbol> constructors = ConstructorsInitializing(definition);
-            if (constructors.Count > 0)
-                return new DataPropertyInfo(DataPropertyKind.ConstructorDerived, property.Name, constructors);
-
-            // An auto-property populated directly by generated code or OnInit without a derived
-            // provenance marker (e.g. Thread.ThreadHandle / ObjectHandle.Handle) is actual
-            // descriptor data and is recorded by its property name.
-            return new DataPropertyInfo(DataPropertyKind.DirectField, property.Name, []);
-        }
-
-        static bool HasComputedGetter(IPropertySymbol property)
-        {
-            foreach (SyntaxReference reference in property.DeclaringSyntaxReferences)
-            {
-                if (reference.GetSyntax() is not Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax declaration)
-                    continue;
-                if (declaration.ExpressionBody is not null)
-                    return true;
-                if (declaration.AccessorList is { } accessors &&
-                    accessors.Accessors.Any(a => a.Body is not null || a.ExpressionBody is not null))
-                    return true;
-            }
-            return false;
-        }
-
-        static List<ISymbol> OnInitMembersInitializing(IPropertySymbol property)
-        {
-            List<ISymbol> members = new();
-            foreach (IMethodSymbol method in property.ContainingType
-                .GetMembers(CdacSymbols.DataInitializerMethodName).OfType<IMethodSymbol>())
-            {
-                foreach (AttributeData attribute in method.GetAttributes())
-                {
-                    if (attribute.AttributeClass?.ToDisplayString() != CdacSymbols.MemberNotNullAttributeMetadataName)
-                        continue;
-                    if (attribute.ConstructorArguments.Any(a => ContainsPropertyName(a, property.Name)))
-                    {
-                        IMethodSymbol implementation = method.PartialImplementationPart ?? method;
-                        if (implementation.DeclaringSyntaxReferences.Length > 0)
-                            members.Add(implementation);
-                        break;
-                    }
-                }
-            }
-            return members;
-        }
-
-        static bool ContainsPropertyName(TypedConstant argument, string propertyName) =>
-            argument.Kind == TypedConstantKind.Array
-                ? argument.Values.Any(v => v.Value is string name && name == propertyName)
-                : argument.Value is string name && name == propertyName;
-
-        List<ISymbol> ConstructorsInitializing(IPropertySymbol property)
-        {
-            List<ISymbol> constructors = new();
-            foreach (IMethodSymbol constructor in property.ContainingType.InstanceConstructors)
-            {
-                foreach (SyntaxReference reference in constructor.DeclaringSyntaxReferences)
-                {
-                    SyntaxNode syntax = reference.GetSyntax();
-                    SemanticModel model = compilation.GetSemanticModel(syntax.SyntaxTree);
-                    if (model.GetOperation(syntax) is not IOperation body)
-                        continue;
-                    if (body.DescendantsAndSelf().OfType<ISimpleAssignmentOperation>().Any(
-                        assignment => assignment.Target is IPropertyReferenceOperation target &&
-                            comparer.Equals(target.Property.OriginalDefinition, property.OriginalDefinition)))
-                    {
-                        constructors.Add(constructor.OriginalDefinition);
-                        break;
-                    }
-                }
-            }
-            return constructors;
-        }
+        return new DataTypeIndex(typesBySymbol, typesByDescriptorName);
     }
 
-    // Highest-priority explicit candidate name from [Field]/[FieldAddress], else the property name.
-    private static string FieldNativeName(IPropertySymbol p)
+    private static IEnumerable<INamedTypeSymbol> EnumerateAllTypes(INamespaceSymbol ns)
     {
-        AttributeData? attr = p.GetAttributes().FirstOrDefault(a =>
-            a.AttributeClass?.ToDisplayString() is
-                CdacSymbols.FieldAttributeMetadataName or
-                CdacSymbols.FieldAddressAttributeMetadataName);
-        if (attr is not null)
-        {
-            if (attr.ConstructorArguments.Length == 1
-                && attr.ConstructorArguments[0].Kind == TypedConstantKind.Array
-                && attr.ConstructorArguments[0].Values is { Length: > 0 } cargs
-                && cargs[0].Value is string cn)
-                return cn;
-            foreach (KeyValuePair<string, TypedConstant> na in attr.NamedArguments)
-                if (na.Key == "Names" && na.Value.Kind == TypedConstantKind.Array
-                    && na.Value.Values is { Length: > 0 } vargs && vargs[0].Value is string nn)
-                    return nn;
-        }
-        return p.Name;
+        foreach (INamedTypeSymbol type in ns.GetTypeMembers())
+            foreach (INamedTypeSymbol nested in EnumerateTypeAndNested(type))
+                yield return nested;
+        foreach (INamespaceSymbol child in ns.GetNamespaceMembers())
+            foreach (INamedTypeSymbol type in EnumerateAllTypes(child))
+                yield return type;
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateTypeAndNested(INamedTypeSymbol type)
+    {
+        yield return type;
+        foreach (INamedTypeSymbol nested in type.GetTypeMembers())
+            foreach (INamedTypeSymbol descendant in EnumerateTypeAndNested(nested))
+                yield return descendant;
     }
 }
