@@ -2,12 +2,11 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json;
-using CdacUsageGraph.Analysis;
 using CdacUsageGraph.Compilation;
-using CdacUsageGraph.Discovery;
 using CdacUsageGraph.Model;
 using CdacUsageGraph.Reporting;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace CdacUsageGraph.Tests;
@@ -18,32 +17,32 @@ namespace CdacUsageGraph.Tests;
 /// </summary>
 public sealed class UsageWalkerIntegrationTests
 {
-    private static (UsageGraph Graph, string Root)? BuildRealGraph()
+    private static readonly Lazy<(UsageGraph Graph, string Root)?> s_realGraph =
+        new(BuildRealGraphCore);
+
+    private static (UsageGraph Graph, string Root)? BuildRealGraph() => s_realGraph.Value;
+
+    private static (UsageGraph Graph, string Root)? BuildRealGraphCore()
     {
         DirectoryInfo? root = Locator.FindCdacRoot();
         if (root is null)
             return null;
 
-        Microsoft.CodeAnalysis.Compilation compilation = CdacCompilationLoader.Load(root.FullName);
-        DataTypeIndex index = DataTypeIndex.Build(compilation);
-        IReadOnlyList<ContractRegistration> registrations = ContractRegistrationParser.Parse(compilation);
-        TypeInfoCorrelator correlator = TypeInfoCorrelator.Build(compilation);
-        UsageGraph graph = new UsageWalker(compilation, index, correlator).Walk(registrations, root.FullName);
-        return (graph, root.FullName);
+        return (AnalysisPipeline.BuildGraph(root.FullName), root.FullName);
     }
 
     [Fact]
-    public void CompilationIncludesRealGeneratedDataMembers()
+    public void MSBuildWorkspaceLoadsGeneratedContractsCompilation()
     {
         DirectoryInfo? root = Locator.FindCdacRoot();
         if (root is null) return; // cDAC source not found (running outside the repo)
 
-        Microsoft.CodeAnalysis.Compilation compilation = CdacCompilationLoader.Load(root.FullName);
+        CSharpCompilation compilation = CdacWorkspaceLoader.Load(root.FullName);
         INamedTypeSymbol jitNotification = compilation.GetTypeByMetadataName(
             "Microsoft.Diagnostics.DataContractReader.Data.JITNotification")!;
 
         Assert.Empty(compilation.GetDiagnostics().Where(
-            d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error));
+            d => d.Severity == DiagnosticSeverity.Error));
         Assert.Single(jitNotification.GetMembers("WriteState").OfType<IMethodSymbol>());
         Assert.Contains(jitNotification.InstanceConstructors, c => c.Parameters.Length == 2);
         Assert.Contains(compilation.SyntaxTrees, tree =>

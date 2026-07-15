@@ -38,9 +38,11 @@ internal sealed class AnalysisPipeline
         if (!Directory.Exists(Path.Combine(cdacRoot, "Microsoft.Diagnostics.DataContractReader.Contracts")))
             throw new InvalidOperationException($"Could not find the cDAC Contracts project under '{cdacRoot}'; pass --cdac-root.");
 
-        // Phase A: compilation.
-        CSharpCompilation compilation = CdacCompilationLoader.Load(cdacRoot);
+        return BuildGraph(CdacWorkspaceLoader.Load(cdacRoot), cdacRoot);
+    }
 
+    private static UsageGraph BuildGraph(CSharpCompilation compilation, string cdacRoot)
+    {
         // Phase B: discovery.
         DataTypeIndex index = DataTypeIndex.Build(compilation);
         IReadOnlyList<ContractRegistration> registrations = ContractRegistrationParser.Parse(compilation);

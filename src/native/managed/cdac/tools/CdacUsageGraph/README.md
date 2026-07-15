@@ -9,12 +9,14 @@ which of their `[Field]` descriptor fields the contract implementation uses.
 
 ## What it does
 
-1. Builds a `CSharpCompilation` over the cDAC `Abstractions` + `Contracts` source
-   (analyzing the source directly -- the cDAC product projects don't need to be compiled
-   first; reference assemblies come from the tool's own runtime). It then runs the real
-   `Microsoft.Diagnostics.DataContractReader.DataGenerator` through a Roslyn
-   `GeneratorDriver`, so the analysis includes the same generated Data constructors,
-   `IData<T>.Create` factories, `Write<Property>` methods and helper types as the product.
+1. Opens the real cDAC `Microsoft.Diagnostics.DataContractReader.Contracts.csproj`
+   in the Debug configuration through Roslyn `MSBuildWorkspace` and obtains its
+   generated `CSharpCompilation`.
+   This preserves evaluated compile items, linked files, project references, build
+   properties, references, analyzer configuration, and the real
+   `Microsoft.Diagnostics.DataContractReader.DataGenerator` output. The analysis
+   therefore includes the same generated Data constructors, `IData<T>.Create`
+   factories, `Write<Property>` methods and helper types as the product build.
 2. Parses `CoreCLRContracts.Register` to map `(interface, version) -> impl type`.
 3. Discovers `Data.*` types (`[CdacType]` / `IData<T>`) and their
    `[Field]`/`[FieldAddress]` properties.
@@ -86,7 +88,7 @@ CdacUsageGraph/                        # tool root (part of the Arcade build)
 ├── src/
 │   └── CdacUsageGraph/                # the tool (Exe): thin Program.cs + all analysis logic
 │       ├── AnalysisOptions.cs, AnalysisPipeline.cs, Commands.cs, Locator.cs, Program.cs
-│       ├── Compilation/               # CdacCompilationLoader (phase A)
+│       ├── Compilation/               # CdacWorkspaceLoader / MSBuildWorkspace (phase A)
 │       ├── Discovery/                 # DataTypeIndex, ContractRegistrationParser, TypeInfoCorrelator (phase B)
 │       ├── Analysis/                  # UsageWalker (OperationWalker), UsageCollector, OperationInspector (phase C/D)
 │       ├── Model/                     # UsageGraph, RegistrationInfo (immutable result)
@@ -142,12 +144,10 @@ pwsh ./generate-docs.ps1 -Check    # fail on drift (same logic as the CI unit te
 ```
 
 The documentation generation logic lives in `Docs/DocGenerator.cs` so the CI unit test and the
-regen use one implementation. The loader derives its source list (including the coreclr tool
-files linked via
-`<Compile Include>`) directly from the cDAC `.csproj`s and **fails fast** if a referenced linked
-file is missing or if discovery finds no Data types / registrations -- so a broken or drifted
-compilation input surfaces as an error rather than a silently under-reported graph. The real cDAC
-source generator is run in-process and the resulting compilation must have zero errors.
+regen use one implementation. `MSBuildWorkspace` evaluates the real Contracts project, including
+its linked CoreCLR source files and generator analyzer reference. Workspace load failures,
+compilation errors, or missing Data types / registrations fail immediately rather than producing
+a silently under-reported graph.
 
 ## Known limitations
 
