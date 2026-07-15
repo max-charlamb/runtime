@@ -18,10 +18,14 @@ internal static class ContractRegistrationParser
     {
         SymbolEqualityComparer comparer = SymbolEqualityComparer.Default;
         List<ContractRegistration> registrations = new List<ContractRegistration>();
+        INamedTypeSymbol? contractRegistry = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.ContractRegistry");
+        INamedTypeSymbol? iContract = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Contracts.IContract");
 
         INamedTypeSymbol? coreContracts = compilation.GetTypeByMetadataName(
             "Microsoft.Diagnostics.DataContractReader.Contracts.CoreCLRContracts");
-        if (coreContracts is not null)
+        if (coreContracts is not null && contractRegistry is not null && iContract is not null)
         {
             foreach (IMethodSymbol reg in coreContracts.GetMembers().OfType<IMethodSymbol>())
             {
@@ -38,9 +42,14 @@ internal static class ContractRegistrationParser
                 {
                     if (inv.TargetMethod.Name != "Register")
                         continue;
+                    if (inv.Instance?.Type is not INamedTypeSymbol receiver ||
+                        !IsOrInheritsFrom(receiver, contractRegistry, comparer))
+                        continue;
                     if (inv.TargetMethod.TypeArguments.Length != 1)
                         continue;
                     if (inv.TargetMethod.TypeArguments[0] is not INamedTypeSymbol iface)
+                        continue;
+                    if (!ImplementsOrEquals(iface, iContract, comparer))
                         continue;
 
                     string? version = inv.Arguments
@@ -55,8 +64,8 @@ internal static class ContractRegistrationParser
                     {
                         if (create.Type is INamedTypeSymbol impl &&
                             comparer.Equals(impl.ContainingAssembly, compilation.Assembly) &&
-                            (comparer.Equals(impl, iface) ||
-                             impl.AllInterfaces.Any(i => comparer.Equals(i.OriginalDefinition, iface.OriginalDefinition))))
+                            ImplementsOrEquals(impl, iface, comparer) &&
+                            ImplementsOrEquals(impl, iContract, comparer))
                         {
                             registrations.Add(new ContractRegistration(iface.Name, version, impl));
                         }
@@ -71,4 +80,25 @@ internal static class ContractRegistrationParser
             .Select(g => g.First())
             .ToList();
     }
+
+    private static bool IsOrInheritsFrom(
+        INamedTypeSymbol type,
+        INamedTypeSymbol expectedBase,
+        SymbolEqualityComparer comparer)
+    {
+        for (INamedTypeSymbol? current = type; current is not null; current = current.BaseType)
+        {
+            if (comparer.Equals(current.OriginalDefinition, expectedBase.OriginalDefinition))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool ImplementsOrEquals(
+        INamedTypeSymbol type,
+        INamedTypeSymbol expectedInterface,
+        SymbolEqualityComparer comparer) =>
+        comparer.Equals(type.OriginalDefinition, expectedInterface.OriginalDefinition) ||
+        type.AllInterfaces.Any(i =>
+            comparer.Equals(i.OriginalDefinition, expectedInterface.OriginalDefinition));
 }

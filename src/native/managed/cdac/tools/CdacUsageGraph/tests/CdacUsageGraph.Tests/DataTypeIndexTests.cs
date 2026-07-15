@@ -274,7 +274,8 @@ public sealed class DataTypeIndexTests
             }
             namespace Microsoft.Diagnostics.DataContractReader.Contracts
             {
-                public interface ITest { }
+                public interface IContract { }
+                public interface ITest : IContract { }
                 public sealed class Helper { }
                 public sealed class Impl : ITest
                 {
@@ -286,7 +287,15 @@ public sealed class DataTypeIndexTests
                         Microsoft.Diagnostics.DataContractReader.ContractRegistry registry)
                     {
                         registry.Register<ITest>("c1", _ => new Impl(new Helper()));
+                        new UnrelatedRegistry().Register<ITest>("c2", _ => new Impl(new Helper()));
+                        registry.Register<ITest>("c3", _ => new NonContractImplementation());
                     }
+                }
+
+                public sealed class NonContractImplementation { }
+                public sealed class UnrelatedRegistry
+                {
+                    public void Register<T>(string version, System.Func<object, T> factory) { }
                 }
             }
             """;
