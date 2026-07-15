@@ -102,7 +102,8 @@ internal sealed class UsageWalker
             return;
 
         IArgumentOperation? typeInfoArgument = invocation.Arguments.FirstOrDefault(
-            a => a.Parameter?.Type.Name == "TypeInfo" && a.Parameter.Type.ContainingType?.Name == "Target");
+            a => a.Parameter?.Type.Name == CdacSymbols.TypeInfoTypeName &&
+                a.Parameter.Type.ContainingType?.Name == CdacSymbols.TargetTypeName);
         IArgumentOperation? fieldNameArgument = invocation.Arguments.FirstOrDefault(
             a => a.Value.ConstantValue is { HasValue: true, Value: string });
         if (typeInfoArgument is null ||
@@ -177,7 +178,7 @@ internal sealed class UsageWalker
             // descriptors). The callee's own reads are not attributed here (interface throw-stub body).
             _collector.RecordContractUsed(label, pr.Property.Name);
         }
-        else if (pr.Property.ContainingType?.Name == "TypeInfo")
+        else if (pr.Property.ContainingType?.Name == CdacSymbols.TypeInfoTypeName)
         {
             // A layout reference on Target.TypeInfo. Resolve which Data type it describes.
             IReadOnlyCollection<string> dataTypeNames = _correlator.GetTypeInfoDataNames(pr.Instance);

@@ -4,6 +4,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.MSBuild;
+using CdacUsageGraph;
 
 namespace CdacUsageGraph.Compilation;
 
@@ -17,8 +18,8 @@ internal static class CdacWorkspaceLoader
     {
         string projectPath = Path.Combine(
             cdacRoot,
-            "Microsoft.Diagnostics.DataContractReader.Contracts",
-            "Microsoft.Diagnostics.DataContractReader.Contracts.csproj");
+            CdacSymbols.ContractsProjectDirectory,
+            CdacSymbols.ContractsProjectFile);
         if (!File.Exists(projectPath))
             throw new InvalidOperationException($"Could not find the cDAC Contracts project at '{projectPath}'.");
 

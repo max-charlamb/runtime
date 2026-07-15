@@ -19,12 +19,12 @@ internal static class ContractRegistrationParser
         SymbolEqualityComparer comparer = SymbolEqualityComparer.Default;
         List<ContractRegistration> registrations = new List<ContractRegistration>();
         INamedTypeSymbol? contractRegistry = compilation.GetTypeByMetadataName(
-            "Microsoft.Diagnostics.DataContractReader.ContractRegistry");
+            CdacSymbols.ContractRegistryMetadataName);
         INamedTypeSymbol? iContract = compilation.GetTypeByMetadataName(
-            "Microsoft.Diagnostics.DataContractReader.Contracts.IContract");
+            CdacSymbols.IContractMetadataName);
 
         INamedTypeSymbol? coreContracts = compilation.GetTypeByMetadataName(
-            "Microsoft.Diagnostics.DataContractReader.Contracts.CoreCLRContracts");
+            CdacSymbols.CoreCLRContractsMetadataName);
         if (coreContracts is not null && contractRegistry is not null && iContract is not null)
         {
             foreach (IMethodSymbol reg in coreContracts.GetMembers().OfType<IMethodSymbol>())
@@ -40,7 +40,7 @@ internal static class ContractRegistrationParser
 
                 foreach (IInvocationOperation inv in op.DescendantsAndSelf().OfType<IInvocationOperation>())
                 {
-                    if (inv.TargetMethod.Name != "Register")
+                    if (inv.TargetMethod.Name != CdacSymbols.ContractRegistrationMethodName)
                         continue;
                     if (inv.Instance?.Type is not INamedTypeSymbol receiver ||
                         !IsOrInheritsFrom(receiver, contractRegistry, comparer))

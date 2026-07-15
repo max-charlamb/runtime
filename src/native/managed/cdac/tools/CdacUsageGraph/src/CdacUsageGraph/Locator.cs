@@ -15,10 +15,10 @@ internal static class Locator
         for (DirectoryInfo? d = new DirectoryInfo(start ?? AppContext.BaseDirectory); d is not null; d = d.Parent)
         {
             string candidate = Path.Combine(d.FullName, "src", "native", "managed", "cdac");
-            if (Directory.Exists(Path.Combine(candidate, "Microsoft.Diagnostics.DataContractReader.Contracts")))
+            if (Directory.Exists(Path.Combine(candidate, CdacSymbols.ContractsProjectDirectory)))
                 return new DirectoryInfo(candidate);
             if (d.Name == "cdac" &&
-                Directory.Exists(Path.Combine(d.FullName, "Microsoft.Diagnostics.DataContractReader.Contracts")))
+                Directory.Exists(Path.Combine(d.FullName, CdacSymbols.ContractsProjectDirectory)))
                 return d;
         }
         return null;

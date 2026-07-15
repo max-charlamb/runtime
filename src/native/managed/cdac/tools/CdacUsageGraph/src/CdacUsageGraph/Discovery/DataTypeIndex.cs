@@ -13,12 +13,6 @@ namespace CdacUsageGraph.Discovery;
 /// </summary>
 internal sealed class DataTypeIndex
 {
-    private const string CdacTypeAttr = "Microsoft.Diagnostics.DataContractReader.CdacTypeAttribute";
-    private const string FieldAttr = "Microsoft.Diagnostics.DataContractReader.FieldAttribute";
-    private const string FieldAddressAttr = "Microsoft.Diagnostics.DataContractReader.FieldAddressAttribute";
-    private const string RawOffsetAttr = "Microsoft.Diagnostics.DataContractReader.RawOffsetAttribute";
-    private const string InstanceDataStartAttr = "Microsoft.Diagnostics.DataContractReader.InstanceDataStartAttribute";
-
     private readonly HashSet<INamedTypeSymbol> _dataTypes;
     private readonly Dictionary<string, INamedTypeSymbol> _cdacNameToType;
     private readonly Dictionary<IPropertySymbol, string> _propertyNativeName;
@@ -93,14 +87,14 @@ internal sealed class DataTypeIndex
         Dictionary<IPropertySymbol, DataPropertyInfo> propertyInfo =
             new Dictionary<IPropertySymbol, DataPropertyInfo>(comparer);
         HashSet<string> dataTypeNames = compilation.GetTypeByMetadataName(
-            "Microsoft.Diagnostics.DataContractReader.DataType")?
+            CdacSymbols.DataTypeMetadataName)?
             .GetMembers().OfType<IFieldSymbol>().Select(f => f.Name).ToHashSet(StringComparer.Ordinal)
             ?? new HashSet<string>(StringComparer.Ordinal);
 
         void VisitType(INamedTypeSymbol t)
         {
             bool isData =
-                t.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == CdacTypeAttr) ||
+                t.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == CdacSymbols.CdacTypeAttributeMetadataName) ||
                 t.AllInterfaces.Any(i => i.Name == "IData");
             if (isData)
             {
@@ -109,12 +103,16 @@ internal sealed class DataTypeIndex
                 foreach (IPropertySymbol m in t.GetMembers().OfType<IPropertySymbol>())
                 {
                     if (m.GetAttributes().Any(a =>
-                            a.AttributeClass?.ToDisplayString() is FieldAttr or FieldAddressAttr or RawOffsetAttr))
+                            a.AttributeClass?.ToDisplayString() is
+                                CdacSymbols.FieldAttributeMetadataName or
+                                CdacSymbols.FieldAddressAttributeMetadataName or
+                                CdacSymbols.RawOffsetAttributeMetadataName))
                         propertyNativeName[m] = FieldNativeName(m);
                 }
 
                 cdacNameToType.TryAdd(t.Name, t);
-                AttributeData? cd = t.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == CdacTypeAttr);
+                AttributeData? cd = t.GetAttributes().FirstOrDefault(
+                    a => a.AttributeClass?.ToDisplayString() == CdacSymbols.CdacTypeAttributeMetadataName);
                 if (cd is { ConstructorArguments.Length: > 0 })
                 {
                     foreach (TypedConstant v in cd.ConstructorArguments[0].Values)
@@ -157,7 +155,7 @@ internal sealed class DataTypeIndex
                 return new DataPropertyInfo(DataPropertyKind.DirectField, nativeName, []);
 
             if (definition.GetAttributes().Any(
-                a => a.AttributeClass?.ToDisplayString() == InstanceDataStartAttr))
+                a => a.AttributeClass?.ToDisplayString() == CdacSymbols.InstanceDataStartAttributeMetadataName))
                 return new DataPropertyInfo(DataPropertyKind.TypeSize, "Size", []);
 
             if (HasComputedGetter(definition))
@@ -195,12 +193,12 @@ internal sealed class DataTypeIndex
         static List<ISymbol> OnInitMembersInitializing(IPropertySymbol property)
         {
             List<ISymbol> members = new();
-            foreach (IMethodSymbol method in property.ContainingType.GetMembers("OnInit").OfType<IMethodSymbol>())
+            foreach (IMethodSymbol method in property.ContainingType
+                .GetMembers(CdacSymbols.DataInitializerMethodName).OfType<IMethodSymbol>())
             {
                 foreach (AttributeData attribute in method.GetAttributes())
                 {
-                    if (attribute.AttributeClass?.ToDisplayString() !=
-                        "System.Diagnostics.CodeAnalysis.MemberNotNullAttribute")
+                    if (attribute.AttributeClass?.ToDisplayString() != CdacSymbols.MemberNotNullAttributeMetadataName)
                         continue;
                     if (attribute.ConstructorArguments.Any(a => ContainsPropertyName(a, property.Name)))
                     {
@@ -247,7 +245,9 @@ internal sealed class DataTypeIndex
     private static string FieldNativeName(IPropertySymbol p)
     {
         AttributeData? attr = p.GetAttributes().FirstOrDefault(a =>
-            a.AttributeClass?.ToDisplayString() is FieldAttr or FieldAddressAttr);
+            a.AttributeClass?.ToDisplayString() is
+                CdacSymbols.FieldAttributeMetadataName or
+                CdacSymbols.FieldAddressAttributeMetadataName);
         if (attr is not null)
         {
             if (attr.ConstructorArguments.Length == 1

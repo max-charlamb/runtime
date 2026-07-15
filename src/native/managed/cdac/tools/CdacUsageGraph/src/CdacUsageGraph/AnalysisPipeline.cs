@@ -35,7 +35,7 @@ internal sealed class AnalysisPipeline
     /// </summary>
     public static UsageGraph BuildGraph(string cdacRoot)
     {
-        if (!Directory.Exists(Path.Combine(cdacRoot, "Microsoft.Diagnostics.DataContractReader.Contracts")))
+        if (!Directory.Exists(Path.Combine(cdacRoot, CdacSymbols.ContractsProjectDirectory)))
             throw new InvalidOperationException($"Could not find the cDAC Contracts project under '{cdacRoot}'; pass --cdac-root.");
 
         return BuildGraph(CdacWorkspaceLoader.Load(cdacRoot), cdacRoot);

@@ -27,12 +27,12 @@ internal static class OperationInspector
         if (expr is null)
             return null;
         expr = Unwrap(expr);
-        if (expr is not IInvocationOperation inv || inv.TargetMethod.Name != "GetTypeInfo")
+        if (expr is not IInvocationOperation inv || inv.TargetMethod.Name != CdacSymbols.GetTypeInfoMethodName)
             return null;
         foreach (IArgumentOperation arg in inv.Arguments)
         {
             IOperation v = Unwrap(arg.Value);
-            if (v is IFieldReferenceOperation f && f.Field.ContainingType?.Name == "DataType")
+            if (v is IFieldReferenceOperation f && f.Field.ContainingType?.Name == CdacSymbols.DataTypeEnumName)
                 return f.Field.Name;
             if (v.ConstantValue is { HasValue: true, Value: string s })
                 return s;
