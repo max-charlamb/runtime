@@ -59,15 +59,14 @@ internal sealed class TypeInfoCorrelator
 
         foreach (IMethodSymbol method in type.GetMembers().OfType<IMethodSymbol>())
         {
-            SyntaxReference? sref = method.DeclaringSyntaxReferences.FirstOrDefault();
-            if (sref is null)
-                continue;
-            SemanticModel model = compilation.GetSemanticModel(sref.SyntaxTree);
-            IOperation? body = model.GetOperation(sref.GetSyntax());
-            if (body is null)
-                continue;
-
-            operations.AddRange(body.DescendantsAndSelf());
+            IMethodSymbol implementation = method.PartialImplementationPart ?? method;
+            foreach (SyntaxReference sref in implementation.DeclaringSyntaxReferences)
+            {
+                SemanticModel model = compilation.GetSemanticModel(sref.SyntaxTree);
+                IOperation? body = model.GetOperation(sref.GetSyntax());
+                if (body is not null)
+                    operations.AddRange(body.DescendantsAndSelf());
+            }
         }
         }
 

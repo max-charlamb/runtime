@@ -135,14 +135,26 @@ internal sealed class UsageWalker
         }
     }
 
-    private void HandlePropertyReference(IPropertyReferenceOperation pr, ContractLabel label)
+    private void HandlePropertyReference(
+        IPropertyReferenceOperation pr,
+        ISymbol containingMember,
+        ContractLabel label)
     {
         if (_index.IsDataType(pr.Property.ContainingType))
         {
+            UsageKind kind = OperationInspector.ClassifyPropertyRef(pr);
+            if (kind == UsageKind.Write &&
+                containingMember is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor &&
+                _cmp.Equals(constructor.ContainingType, pr.Property.ContainingType))
+            {
+                // Generated Data constructors assign each property from target memory. The
+                // assignment target is a C# write, but its descriptor dependency is a target read.
+                kind = UsageKind.Read;
+            }
             HandleDataProperty(
                 pr.Property,
                 pr.Property.ContainingType!,
-                OperationInspector.ClassifyPropertyRef(pr),
+                kind,
                 label);
         }
         else if (pr.Property.ContainingType is { TypeKind: TypeKind.Interface } iface)
@@ -210,6 +222,11 @@ internal sealed class UsageWalker
             RecordField(label, dataType, info.NativeName, kind);
             return;
         }
+        if (info.Kind == DataPropertyKind.TypeSize)
+        {
+            RecordField(label, dataType, "Size", UsageKind.Read);
+            return;
+        }
 
         RecordType(label, dataType);
         foreach (ISymbol member in info.ExpansionMembers)
@@ -222,33 +239,6 @@ internal sealed class UsageWalker
         ITypeSymbol r = Resolve(to.TypeOperand, subst);
         if (_index.IsDataType(r))
             RecordType(label, r);
-    }
-
-    // IData's generated Write<Property> methods are absent from the manual analysis compilation,
-    // so Roslyn represents calls such as WriteState(0) as invalid invocation syntax. Recover the
-    // intended write when the reached member belongs to a Data type and the suffix names a real
-    // descriptor field.
-    private void HandleInvalid(IInvalidOperation invalid, ISymbol containingMember, ContractLabel label)
-    {
-        if (invalid.Syntax is not InvocationExpressionSyntax invocation)
-            return;
-
-        string? methodName = invocation.Expression switch
-        {
-            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-            MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
-            _ => null,
-        };
-        if (methodName is null || !methodName.StartsWith("Write", StringComparison.Ordinal) ||
-            containingMember.ContainingType is not INamedTypeSymbol dataType ||
-            !_index.IsDataType(dataType))
-            return;
-
-        string propertyName = methodName.Substring("Write".Length);
-        IPropertySymbol? property = dataType.GetMembers(propertyName).OfType<IPropertySymbol>()
-            .FirstOrDefault(_index.IsField);
-        if (property is not null)
-            RecordField(label, dataType, _index.NativeName(property), UsageKind.Write);
     }
 
     // ---- recording helpers -----------------------------------------------------------------
@@ -294,39 +284,38 @@ internal sealed class UsageWalker
     // The IOperation(s) to walk for a member: a method body, or a field/property initializer value.
     private IEnumerable<IOperation> GetMemberOperations(ISymbol member)
     {
-        SyntaxReference? sref = member.DeclaringSyntaxReferences.FirstOrDefault();
-        if (sref is null)
-            yield break;
-        SyntaxNode syntax = sref.GetSyntax();
-        SemanticModel model = _compilation.GetSemanticModel(syntax.SyntaxTree);
-
-        switch (member)
+        foreach (SyntaxReference sref in member.DeclaringSyntaxReferences)
         {
-            case IMethodSymbol:
-                if (model.GetOperation(syntax) is IOperation methodOp)
-                    yield return methodOp;
-                break;
-            case IFieldSymbol when syntax is VariableDeclaratorSyntax { Initializer.Value: { } fieldValue }:
-                if (model.GetOperation(fieldValue) is IOperation fieldOp)
-                    yield return fieldOp;
-                break;
-            case IPropertySymbol when syntax is PropertyDeclarationSyntax pds:
-                // Computed getter of a Data property: walk the initializer (= expr), expression body
-                // (=> expr) and accessor bodies so the actual [Field]s it reads are attributed.
-                if (pds.Initializer?.Value is { } initValue && model.GetOperation(initValue) is { } initOp)
-                    yield return initOp;
-                if (pds.ExpressionBody?.Expression is { } exprValue && model.GetOperation(exprValue) is { } exprOp)
-                    yield return exprOp;
-                if (pds.AccessorList is { } accessors)
-                {
+            SyntaxNode syntax = sref.GetSyntax();
+            SemanticModel model = _compilation.GetSemanticModel(syntax.SyntaxTree);
+
+            switch (member)
+            {
+                case IMethodSymbol:
+                    if (model.GetOperation(syntax) is IOperation methodOp)
+                        yield return methodOp;
+                    break;
+                case IFieldSymbol when syntax is VariableDeclaratorSyntax { Initializer.Value: { } fieldValue }:
+                    if (model.GetOperation(fieldValue) is IOperation fieldOp)
+                        yield return fieldOp;
+                    break;
+                case IPropertySymbol when syntax is PropertyDeclarationSyntax pds:
+                    // Computed getter of a Data property: walk the initializer (= expr), expression body
+                    // (=> expr) and accessor bodies so the actual [Field]s it reads are attributed.
+                    if (pds.Initializer?.Value is { } initValue && model.GetOperation(initValue) is { } initOp)
+                        yield return initOp;
+                    if (pds.ExpressionBody?.Expression is { } exprValue && model.GetOperation(exprValue) is { } exprOp)
+                        yield return exprOp;
+                    if (pds.AccessorList is not { } accessors)
+                        break;
                     foreach (AccessorDeclarationSyntax accessor in accessors.Accessors)
                     {
                         SyntaxNode? body = (SyntaxNode?)accessor.Body ?? accessor.ExpressionBody?.Expression;
                         if (body is not null && model.GetOperation(body) is { } accessorOp)
                             yield return accessorOp;
                     }
-                }
-                break;
+                    break;
+            }
         }
     }
 
@@ -423,7 +412,7 @@ internal sealed class UsageWalker
 
         public override void VisitPropertyReference(IPropertyReferenceOperation op)
         {
-            owner.HandlePropertyReference(op, label);
+            owner.HandlePropertyReference(op, containingMember, label);
             base.VisitPropertyReference(op);
         }
 
@@ -433,11 +422,6 @@ internal sealed class UsageWalker
             base.VisitTypeOf(op);
         }
 
-        public override void VisitInvalid(IInvalidOperation op)
-        {
-            owner.HandleInvalid(op, containingMember, label);
-            base.VisitInvalid(op);
-        }
     }
 
     private sealed class WorkItemComparer(SymbolEqualityComparer comparer)

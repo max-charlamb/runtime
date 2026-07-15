@@ -10,9 +10,11 @@ which of their `[Field]` descriptor fields the contract implementation uses.
 ## What it does
 
 1. Builds a `CSharpCompilation` over the cDAC `Abstractions` + `Contracts` source
-   (analyzing the source directly -- the cDAC projects don't need to be compiled first,
-   and the source-generated `IData<T>.Create` factories are not needed to analyze usage;
-   reference assemblies come from the tool's own runtime).
+   (analyzing the source directly -- the cDAC product projects don't need to be compiled
+   first; reference assemblies come from the tool's own runtime). It then runs the real
+   `Microsoft.Diagnostics.DataContractReader.DataGenerator` through a Roslyn
+   `GeneratorDriver`, so the analysis includes the same generated Data constructors,
+   `IData<T>.Create` factories, `Write<Property>` methods and helper types as the product.
 2. Parses `CoreCLRContracts.Register` to map `(interface, version) -> impl type`.
 3. Discovers `Data.*` types (`[CdacType]` / `IData<T>`) and their
    `[Field]`/`[FieldAddress]` properties.
@@ -139,15 +141,13 @@ pwsh ./generate-docs.ps1           # rewrite marked blocks in place
 pwsh ./generate-docs.ps1 -Check    # fail on drift (same logic as the CI unit test)
 ```
 
-The generation logic lives in `Docs/DocGenerator.cs` so the CI unit test and the manual
+The documentation generation logic lives in `Docs/DocGenerator.cs` so the CI unit test and the
 regen use one implementation. The loader derives its source list (including the coreclr tool
 files linked via
 `<Compile Include>`) directly from the cDAC `.csproj`s and **fails fast** if a referenced linked
 file is missing or if discovery finds no Data types / registrations -- so a broken or drifted
-compilation input surfaces as an error rather than a silently under-reported graph. The manual
-compilation's expected source-generator-related diagnostic IDs/counts are also baselined; any
-unexpected semantic error fails CI. Generated `Write<Property>` calls that appear as invalid
-Roslyn operations are recovered and recorded as field writes.
+compilation input surfaces as an error rather than a silently under-reported graph. The real cDAC
+source generator is run in-process and the resulting compilation must have zero errors.
 
 ## Known limitations
 

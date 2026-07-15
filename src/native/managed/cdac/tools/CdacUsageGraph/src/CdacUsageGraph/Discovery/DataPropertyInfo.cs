@@ -8,6 +8,7 @@ namespace CdacUsageGraph.Discovery;
 internal enum DataPropertyKind
 {
     DirectField,
+    TypeSize,
     Computed,
     OnInitDerived,
     ConstructorDerived,

@@ -16,6 +16,8 @@ internal sealed class DataTypeIndex
     private const string CdacTypeAttr = "Microsoft.Diagnostics.DataContractReader.CdacTypeAttribute";
     private const string FieldAttr = "Microsoft.Diagnostics.DataContractReader.FieldAttribute";
     private const string FieldAddressAttr = "Microsoft.Diagnostics.DataContractReader.FieldAddressAttribute";
+    private const string RawOffsetAttr = "Microsoft.Diagnostics.DataContractReader.RawOffsetAttribute";
+    private const string InstanceDataStartAttr = "Microsoft.Diagnostics.DataContractReader.InstanceDataStartAttribute";
 
     private readonly HashSet<INamedTypeSymbol> _dataTypes;
     private readonly Dictionary<string, INamedTypeSymbol> _cdacNameToType;
@@ -107,7 +109,7 @@ internal sealed class DataTypeIndex
                 foreach (IPropertySymbol m in t.GetMembers().OfType<IPropertySymbol>())
                 {
                     if (m.GetAttributes().Any(a =>
-                            a.AttributeClass?.ToDisplayString() is FieldAttr or FieldAddressAttr))
+                            a.AttributeClass?.ToDisplayString() is FieldAttr or FieldAddressAttr or RawOffsetAttr))
                         propertyNativeName[m] = FieldNativeName(m);
                 }
 
@@ -154,6 +156,10 @@ internal sealed class DataTypeIndex
             if (propertyNativeName.TryGetValue(definition, out string? nativeName))
                 return new DataPropertyInfo(DataPropertyKind.DirectField, nativeName, []);
 
+            if (definition.GetAttributes().Any(
+                a => a.AttributeClass?.ToDisplayString() == InstanceDataStartAttr))
+                return new DataPropertyInfo(DataPropertyKind.TypeSize, "Size", []);
+
             if (HasComputedGetter(definition))
                 return new DataPropertyInfo(DataPropertyKind.Computed, property.Name, [definition]);
 
@@ -198,7 +204,9 @@ internal sealed class DataTypeIndex
                         continue;
                     if (attribute.ConstructorArguments.Any(a => ContainsPropertyName(a, property.Name)))
                     {
-                        members.Add(method.OriginalDefinition);
+                        IMethodSymbol implementation = method.PartialImplementationPart ?? method;
+                        if (implementation.DeclaringSyntaxReferences.Length > 0)
+                            members.Add(implementation);
                         break;
                     }
                 }

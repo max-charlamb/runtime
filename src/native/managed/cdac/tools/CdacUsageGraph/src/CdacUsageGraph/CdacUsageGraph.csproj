@@ -20,6 +20,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The analysis compilation runs the same source generator as the real Contracts project. -->
+    <ProjectReference Include="..\..\..\..\gen\Microsoft.Diagnostics.DataContractReader.DataGenerator.csproj"
+                      GlobalPropertiesToRemove="RuntimeIdentifier" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="CdacUsageGraph.Tests" />
   </ItemGroup>
 

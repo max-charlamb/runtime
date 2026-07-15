@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Xml.Linq;
+using Microsoft.Diagnostics.DataContractReader.DataGenerator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -12,26 +13,12 @@ namespace CdacUsageGraph.Compilation;
 /// source. Each project's own source is globbed from its directory, and the extra source files
 /// the project links in via explicit <c>&lt;Compile Include="..."/&gt;</c> items (e.g. the coreclr
 /// tool files) are read straight from the <c>.csproj</c> so the input can't silently drift.
-/// No MSBuild restore is required; the source-generated <c>IData&lt;T&gt;.Create</c> factories are
-/// not needed to analyze contract-to-Data usage, so compilation errors are expected and non-fatal.
+/// The real cDAC <see cref="CdacGenerator"/> is then run through a Roslyn
+/// <see cref="GeneratorDriver"/>, producing the same Data constructors, factories, writable-field
+/// methods and helper types used by the product build. The resulting compilation must be error-free.
 /// </summary>
 internal static class CdacCompilationLoader
 {
-    // The manual compilation intentionally omits the IData source generator. Keep the expected
-    // error surface explicit: a new/missing diagnostic means the semantic model changed and the
-    // analysis could silently under-report, so CI should require this baseline to be reviewed.
-    private static readonly Dictionary<string, int> s_expectedErrorCounts =
-        new Dictionary<string, int>(StringComparer.Ordinal)
-        {
-            ["CS0103"] = 6,   // Generated Write<Property> method is not in the current context.
-            ["CS0117"] = 1,   // Generated static Data member is absent.
-            ["CS0535"] = 188, // IData<T>.Create implementations are generated.
-            ["CS0759"] = 29,  // OnInit partial definitions are generated.
-            ["CS1061"] = 45,  // Generated members/constructors are absent.
-            ["CS1729"] = 4,   // Generated Data constructors are absent.
-            ["CS8795"] = 3,   // Required partial method implementations are generated.
-        };
-
     private static readonly string[] s_projects =
     [
         "Microsoft.Diagnostics.DataContractReader.Abstractions",
@@ -88,7 +75,7 @@ internal static class CdacCompilationLoader
             .Select(f => CSharpSyntaxTree.ParseText(File.ReadAllText(f), parseOptions, path: f))
             .ToList();
 
-        CSharpCompilation compilation = CSharpCompilation.Create(
+        CSharpCompilation inputCompilation = CSharpCompilation.Create(
             "CdacUsageAnalysis",
             trees,
             GetRuntimeReferences(),
@@ -96,37 +83,36 @@ internal static class CdacCompilationLoader
                 OutputKind.DynamicallyLinkedLibrary,
                 allowUnsafe: true,
                 nullableContextOptions: NullableContextOptions.Enable));
-        ValidateExpectedDiagnostics(compilation);
-        return compilation;
-    }
 
-    private static void ValidateExpectedDiagnostics(CSharpCompilation compilation)
-    {
-        Dictionary<string, int> actual = compilation.GetDiagnostics()
+        ISourceGenerator generator = new CdacGenerator().AsSourceGenerator();
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            generators: [generator],
+            parseOptions: parseOptions);
+        driver.RunGeneratorsAndUpdateCompilation(
+            inputCompilation,
+            out Microsoft.CodeAnalysis.Compilation outputCompilation,
+            out System.Collections.Immutable.ImmutableArray<Diagnostic> generatorDiagnostics);
+
+        if (outputCompilation is not CSharpCompilation compilation)
+            throw new InvalidOperationException("The cDAC generator did not produce a C# compilation.");
+
+        List<Diagnostic> errors = generatorDiagnostics
+            .Concat(compilation.GetDiagnostics())
             .Where(d => d.Severity == DiagnosticSeverity.Error)
-            .GroupBy(d => d.Id)
-            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
-
-        if (actual.Count == s_expectedErrorCounts.Count &&
-            actual.All(kv => s_expectedErrorCounts.TryGetValue(kv.Key, out int expected) && expected == kv.Value))
-            return;
-
-        static string Format(IEnumerable<KeyValuePair<string, int>> counts) =>
-            string.Join(", ", counts.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"));
+            .ToList();
+        if (errors.Count == 0)
+            return compilation;
 
         throw new InvalidOperationException(
-            "The cDAC analysis compilation diagnostic baseline changed. Because compilation errors " +
-            "can degrade Roslyn operations and silently under-report usage, review the diagnostics " +
-            "and update CdacCompilationLoader only if the change is expected." + Environment.NewLine +
-            "Expected: " + Format(s_expectedErrorCounts) + Environment.NewLine +
-            "Actual:   " + Format(actual));
+            "The cDAC source generator did not produce an error-free analysis compilation:" +
+            Environment.NewLine +
+            string.Join(Environment.NewLine, errors.Take(20).Select(d => $"  {d.Id}: {d.GetMessage()}")));
     }
 
     // Reference assemblies for the compilation: the trusted-platform-assembly set of the runtime
     // the tool is executing on ($(NetCoreAppToolCurrent)). This is a superset of what the cDAC
     // source needs (System.*), so the semantic model resolves BCL types without pulling in the
-    // separate Basic.Reference.Assemblies package. The source-generated IData<T>.Create factories
-    // are still absent, so a handful of compile errors remain expected and non-fatal.
+    // separate Basic.Reference.Assemblies package.
     private static IEnumerable<MetadataReference> GetRuntimeReferences()
     {
         if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is not string tpa)

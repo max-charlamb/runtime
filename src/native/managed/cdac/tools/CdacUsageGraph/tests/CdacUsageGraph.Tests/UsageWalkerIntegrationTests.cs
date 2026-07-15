@@ -7,6 +7,7 @@ using CdacUsageGraph.Compilation;
 using CdacUsageGraph.Discovery;
 using CdacUsageGraph.Model;
 using CdacUsageGraph.Reporting;
+using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace CdacUsageGraph.Tests;
@@ -29,6 +30,24 @@ public sealed class UsageWalkerIntegrationTests
         TypeInfoCorrelator correlator = TypeInfoCorrelator.Build(compilation);
         UsageGraph graph = new UsageWalker(compilation, index, correlator).Walk(registrations, root.FullName);
         return (graph, root.FullName);
+    }
+
+    [Fact]
+    public void CompilationIncludesRealGeneratedDataMembers()
+    {
+        DirectoryInfo? root = Locator.FindCdacRoot();
+        if (root is null) return; // cDAC source not found (running outside the repo)
+
+        Microsoft.CodeAnalysis.Compilation compilation = CdacCompilationLoader.Load(root.FullName);
+        INamedTypeSymbol jitNotification = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Data.JITNotification")!;
+
+        Assert.Empty(compilation.GetDiagnostics().Where(
+            d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error));
+        Assert.Single(jitNotification.GetMembers("WriteState").OfType<IMethodSymbol>());
+        Assert.Contains(jitNotification.InstanceConstructors, c => c.Parameters.Length == 2);
+        Assert.Contains(compilation.SyntaxTrees, tree =>
+            tree.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
     }
 
     [Fact]
