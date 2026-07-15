@@ -63,7 +63,7 @@ internal sealed class DataTypeIndex
         Dictionary<string, DataTypeInfo> typesByName =
             new Dictionary<string, DataTypeInfo>(StringComparer.Ordinal);
 
-        foreach (INamedTypeSymbol candidate in EnumerateAllTypes(compilation.Assembly.GlobalNamespace))
+        foreach (INamedTypeSymbol candidate in compilation.Assembly.GlobalNamespace.EnumerateNamedTypes())
         {
             if (candidate.TypeKind != TypeKind.Class ||
                 !compilation.IsAssignableTo(candidate, iDataDefinition.Construct(candidate)))
@@ -76,23 +76,5 @@ internal sealed class DataTypeIndex
         }
 
         return new DataTypeIndex(typesBySymbol, typesByName);
-    }
-
-    private static IEnumerable<INamedTypeSymbol> EnumerateAllTypes(INamespaceSymbol ns)
-    {
-        foreach (INamedTypeSymbol type in ns.GetTypeMembers())
-            foreach (INamedTypeSymbol nested in EnumerateTypeAndNested(type))
-                yield return nested;
-        foreach (INamespaceSymbol child in ns.GetNamespaceMembers())
-            foreach (INamedTypeSymbol type in EnumerateAllTypes(child))
-                yield return type;
-    }
-
-    private static IEnumerable<INamedTypeSymbol> EnumerateTypeAndNested(INamedTypeSymbol type)
-    {
-        yield return type;
-        foreach (INamedTypeSymbol nested in type.GetTypeMembers())
-            foreach (INamedTypeSymbol descendant in EnumerateTypeAndNested(nested))
-                yield return descendant;
     }
 }

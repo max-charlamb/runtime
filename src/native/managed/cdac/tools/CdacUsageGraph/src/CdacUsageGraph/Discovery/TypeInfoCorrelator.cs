@@ -42,9 +42,9 @@ internal sealed class TypeInfoCorrelator
         Dictionary<ISymbol, HashSet<string>> varToNames =
             new Dictionary<ISymbol, HashSet<string>>(SymbolEqualityComparer.Default);
         List<IOperation> operations = new List<IOperation>();
-        List<(IParameterSymbol Interface, IParameterSymbol Implementation)> parameterLinks = new();
+        List<(IParameterSymbol Interface, IParameterSymbol Implementation)> parameterLinks = [];
 
-        foreach (INamedTypeSymbol type in EnumerateAllTypes(compilation.Assembly.GlobalNamespace))
+        foreach (INamedTypeSymbol type in compilation.Assembly.GlobalNamespace.EnumerateNamedTypes())
         {
             foreach (INamedTypeSymbol iface in type.AllInterfaces)
             {
@@ -138,23 +138,5 @@ internal sealed class TypeInfoCorrelator
                 added |= set.Add(name);
             return added;
         }
-    }
-
-    private static IEnumerable<INamedTypeSymbol> EnumerateAllTypes(INamespaceSymbol ns)
-    {
-        foreach (INamedTypeSymbol t in ns.GetTypeMembers())
-            foreach (INamedTypeSymbol nested in EnumerateWithNested(t))
-                yield return nested;
-        foreach (INamespaceSymbol child in ns.GetNamespaceMembers())
-            foreach (INamedTypeSymbol t in EnumerateAllTypes(child))
-                yield return t;
-    }
-
-    private static IEnumerable<INamedTypeSymbol> EnumerateWithNested(INamedTypeSymbol t)
-    {
-        yield return t;
-        foreach (INamedTypeSymbol nested in t.GetTypeMembers())
-            foreach (INamedTypeSymbol n in EnumerateWithNested(nested))
-                yield return n;
     }
 }

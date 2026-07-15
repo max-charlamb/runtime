@@ -10,6 +10,22 @@ namespace CdacUsageGraph.Discovery;
 internal static class SymbolExtensions
 {
     /// <summary>
+    /// Enumerates every named type declared under a namespace, including nested types at every
+    /// depth. Discovery passes use this shared traversal so they inspect the same compilation
+    /// surface.
+    /// </summary>
+    public static IEnumerable<INamedTypeSymbol> EnumerateNamedTypes(this INamespaceSymbol @namespace)
+    {
+        foreach (INamedTypeSymbol type in @namespace.GetTypeMembers())
+            foreach (INamedTypeSymbol nested in EnumerateTypeAndNested(type))
+                yield return nested;
+
+        foreach (INamespaceSymbol child in @namespace.GetNamespaceMembers())
+            foreach (INamedTypeSymbol type in child.EnumerateNamedTypes())
+                yield return type;
+    }
+
+    /// <summary>
     /// Returns whether C# permits an implicit conversion from <paramref name="source"/> to
     /// <paramref name="target"/>. Covers identity, class/interface inheritance, implemented
     /// interfaces, and applicable generic/variance conversions.
@@ -19,4 +35,12 @@ internal static class SymbolExtensions
         ITypeSymbol source,
         ITypeSymbol target) =>
         compilation.ClassifyConversion(source, target).IsImplicit;
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateTypeAndNested(INamedTypeSymbol type)
+    {
+        yield return type;
+        foreach (INamedTypeSymbol nested in type.GetTypeMembers())
+            foreach (INamedTypeSymbol descendant in EnumerateTypeAndNested(nested))
+                yield return descendant;
+    }
 }

@@ -162,7 +162,7 @@ internal sealed class DataTypeInfo
         IPropertySymbol property,
         SymbolEqualityComparer comparer)
     {
-        List<ISymbol> constructors = new();
+        List<ISymbol> constructors = [];
         foreach (IMethodSymbol constructor in property.ContainingType.InstanceConstructors)
         {
             foreach (SyntaxReference reference in constructor.DeclaringSyntaxReferences)
