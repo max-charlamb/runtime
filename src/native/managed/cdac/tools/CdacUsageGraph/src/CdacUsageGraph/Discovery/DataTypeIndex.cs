@@ -58,12 +58,6 @@ internal sealed class DataTypeIndex
         if (iDataDefinition is null)
             throw new InvalidOperationException($"Could not resolve {CdacSymbols.IDataMetadataName}.");
 
-        HashSet<string> descriptorEnumNames = compilation.GetTypeByMetadataName(
-            CdacSymbols.DataTypeMetadataName)?
-            .GetMembers().OfType<IFieldSymbol>()
-            .Select(field => field.Name)
-            .ToHashSet(StringComparer.Ordinal)
-            ?? new HashSet<string>(StringComparer.Ordinal);
         Dictionary<INamedTypeSymbol, DataTypeInfo> typesBySymbol =
             new Dictionary<INamedTypeSymbol, DataTypeInfo>(comparer);
         Dictionary<string, DataTypeInfo> typesByDescriptorName =
@@ -75,11 +69,12 @@ internal sealed class DataTypeIndex
                 !compilation.IsAssignableTo(candidate, iDataDefinition.Construct(candidate)))
                 continue;
 
-            DataTypeInfo info = DataTypeInfo.Create(
-                compilation, candidate, descriptorEnumNames, comparer);
+            DataTypeInfo info = DataTypeInfo.Create(compilation, candidate, comparer);
             typesBySymbol.Add(candidate, info);
             typesByDescriptorName.TryAdd(candidate.Name, info);
             typesByDescriptorName[info.DescriptorName] = info;
+            foreach (string layoutName in info.LayoutNames)
+                typesByDescriptorName[layoutName] = info;
         }
 
         return new DataTypeIndex(typesBySymbol, typesByDescriptorName);

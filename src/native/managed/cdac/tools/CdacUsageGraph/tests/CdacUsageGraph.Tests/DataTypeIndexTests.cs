@@ -133,6 +133,9 @@ public sealed class DataTypeIndexTests
                 [Microsoft.Diagnostics.DataContractReader.CdacType(
                     nameof(Microsoft.Diagnostics.DataContractReader.DataType.WidgetTable))]
                 public sealed class WidgetEntry : IData<WidgetEntry> { }
+
+                [Microsoft.Diagnostics.DataContractReader.CdacType("Managed.Layout")]
+                public sealed class ManagedLayout : IData<ManagedLayout> { }
             }
             """;
         CSharpCompilation compilation = CSharpCompilation.Create(
@@ -147,6 +150,13 @@ public sealed class DataTypeIndexTests
 
         Assert.True(index.TryGetDataType(entry, out DataTypeInfo dataType));
         Assert.Equal("WidgetTable", dataType.DescriptorName);
+
+        INamedTypeSymbol managedLayout = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Data.ManagedLayout")!;
+        Assert.True(index.TryGetDataType(managedLayout, out DataTypeInfo managedDataType));
+        Assert.Equal("ManagedLayout", managedDataType.DescriptorName);
+        Assert.True(index.TryGetType("Managed.Layout", out DataTypeInfo resolvedManagedType));
+        Assert.Equal(managedLayout, resolvedManagedType.Symbol, SymbolEqualityComparer.Default);
     }
 
     [Fact]
