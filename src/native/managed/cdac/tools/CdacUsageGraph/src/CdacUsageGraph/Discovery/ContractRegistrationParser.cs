@@ -14,7 +14,8 @@ namespace CdacUsageGraph.Discovery;
 /// </summary>
 internal static class ContractRegistrationParser
 {
-    public static IReadOnlyList<ContractRegistration> Parse(Microsoft.CodeAnalysis.Compilation compilation)
+    public static IReadOnlyList<ContractRegistration> Parse(
+        Microsoft.CodeAnalysis.CSharp.CSharpCompilation compilation)
     {
         SymbolEqualityComparer comparer = SymbolEqualityComparer.Default;
         List<ContractRegistration> registrations = new List<ContractRegistration>();
@@ -85,13 +86,8 @@ internal static class ContractRegistrationParser
     // inheritance, and class-to-implemented-interface conversion. It is more complete than
     // manually comparing BaseType and AllInterfaces, including generic/variance cases.
     private static bool IsAssignableTo(
-        Microsoft.CodeAnalysis.Compilation compilation,
+        Microsoft.CodeAnalysis.CSharp.CSharpCompilation compilation,
         ITypeSymbol source,
-        ITypeSymbol target)
-    {
-        if (compilation is not Microsoft.CodeAnalysis.CSharp.CSharpCompilation csharpCompilation)
-            throw new InvalidOperationException("cDAC contract registration analysis requires a C# compilation.");
-
-        return csharpCompilation.ClassifyConversion(source, target).IsImplicit;
-    }
+        ITypeSymbol target) =>
+        compilation.ClassifyConversion(source, target).IsImplicit;
 }
