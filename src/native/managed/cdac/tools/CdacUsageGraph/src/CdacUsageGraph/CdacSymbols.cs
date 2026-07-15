@@ -19,8 +19,6 @@ internal static class CdacSymbols
         "Microsoft.Diagnostics.DataContractReader.Contracts.IContract";
     public const string CoreCLRContractsMetadataName =
         "Microsoft.Diagnostics.DataContractReader.Contracts.CoreCLRContracts";
-    public const string DataTypeMetadataName =
-        "Microsoft.Diagnostics.DataContractReader.DataType";
     public const string IDataMetadataName =
         "Microsoft.Diagnostics.DataContractReader.Data.IData`1";
 

@@ -83,7 +83,7 @@ function NormField($f) {
     return $x.ToLowerInvariant()
 }
 function NormKey($x) {
-    $dot = $x.IndexOf('.')
+    $dot = $x.LastIndexOf('.')
     if ($dot -lt 0) { return (NormType $x) }
     return (NormType $x.Substring(0,$dot)) + '.' + (NormField $x.Substring($dot+1))
 }

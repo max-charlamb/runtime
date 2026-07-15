@@ -8,20 +8,20 @@ namespace CdacUsageGraph.Discovery;
 
 /// <summary>
 /// Phase B (part 1): lookup index over the discovered <see cref="DataTypeInfo"/> objects.
-/// Detection requires the real <c>IData&lt;TSelf&gt;</c> contract; descriptor aliases and property
+/// Detection requires the real <c>IData&lt;TSelf&gt;</c> contract; cDAC names and property
 /// provenance are owned by each <see cref="DataTypeInfo"/>, not parallel index dictionaries.
 /// </summary>
 internal sealed class DataTypeIndex
 {
     private readonly Dictionary<INamedTypeSymbol, DataTypeInfo> _typesBySymbol;
-    private readonly Dictionary<string, DataTypeInfo> _typesByDescriptorName;
+    private readonly Dictionary<string, DataTypeInfo> _typesByName;
 
     private DataTypeIndex(
         Dictionary<INamedTypeSymbol, DataTypeInfo> typesBySymbol,
-        Dictionary<string, DataTypeInfo> typesByDescriptorName)
+        Dictionary<string, DataTypeInfo> typesByName)
     {
         _typesBySymbol = typesBySymbol;
-        _typesByDescriptorName = typesByDescriptorName;
+        _typesByName = typesByName;
     }
 
     public int Count => _typesBySymbol.Count;
@@ -39,9 +39,9 @@ internal sealed class DataTypeIndex
 
     public bool IsDataType(ITypeSymbol? symbol) => TryGetDataType(symbol, out _);
 
-    /// <summary>Resolves a native descriptor name from <c>GetTypeInfo(DataType.X)</c>.</summary>
-    public bool TryGetType(string descriptorName, out DataTypeInfo info) =>
-        _typesByDescriptorName.TryGetValue(descriptorName, out info!);
+    /// <summary>Resolves a cDAC layout name from <c>GetTypeInfo(...)</c>.</summary>
+    public bool TryGetType(string name, out DataTypeInfo info) =>
+        _typesByName.TryGetValue(name, out info!);
 
     /// <summary>The discovered Data types that implement <paramref name="interfaceType"/>.</summary>
     public IEnumerable<DataTypeInfo> DataTypesImplementing(INamedTypeSymbol interfaceType) =>
@@ -60,7 +60,7 @@ internal sealed class DataTypeIndex
 
         Dictionary<INamedTypeSymbol, DataTypeInfo> typesBySymbol =
             new Dictionary<INamedTypeSymbol, DataTypeInfo>(comparer);
-        Dictionary<string, DataTypeInfo> typesByDescriptorName =
+        Dictionary<string, DataTypeInfo> typesByName =
             new Dictionary<string, DataTypeInfo>(StringComparer.Ordinal);
 
         foreach (INamedTypeSymbol candidate in EnumerateAllTypes(compilation.Assembly.GlobalNamespace))
@@ -71,13 +71,11 @@ internal sealed class DataTypeIndex
 
             DataTypeInfo info = DataTypeInfo.Create(compilation, candidate, comparer);
             typesBySymbol.Add(candidate, info);
-            typesByDescriptorName.TryAdd(candidate.Name, info);
-            typesByDescriptorName[info.DescriptorName] = info;
-            foreach (string layoutName in info.LayoutNames)
-                typesByDescriptorName[layoutName] = info;
+            foreach (string name in info.Names)
+                typesByName[name] = info;
         }
 
-        return new DataTypeIndex(typesBySymbol, typesByDescriptorName);
+        return new DataTypeIndex(typesBySymbol, typesByName);
     }
 
     private static IEnumerable<INamedTypeSymbol> EnumerateAllTypes(INamespaceSymbol ns)

@@ -244,7 +244,7 @@ internal sealed class UsageWalker
 
     // ---- recording helpers -----------------------------------------------------------------
 
-    private static string DataName(DataTypeInfo type) => "Data." + type.DescriptorName;
+    private static string DataName(DataTypeInfo type) => "Data." + type.Name;
 
     private void RecordType(ContractLabel label, ITypeSymbol t) =>
         _collector.RecordType(label, _index.TryGetDataType(t, out DataTypeInfo info) ? DataName(info) : "Data." + t.Name);

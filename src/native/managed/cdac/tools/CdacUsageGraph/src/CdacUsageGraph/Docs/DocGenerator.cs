@@ -143,7 +143,7 @@ internal sealed partial class DocGenerator
         };
         foreach (string key in keys)
         {
-            int dot = key.IndexOf('.', StringComparison.Ordinal);
+            int dot = key.LastIndexOf('.', StringComparison.Ordinal);
             string type = key.Substring(0, dot);
             string field = key.Substring(dot + 1);
             rows.Add($"| `{type}` | `{field}` | {_meanings.Meaning(contractShort, key)} |");

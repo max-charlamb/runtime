@@ -66,6 +66,34 @@ public sealed class DocsAreUpToDateTests
         Assert.Throws<System.Text.Json.JsonException>(() => DocDescriptorMeanings.Load(path));
     }
 
+    [Fact]
+    public void GeneratesManagedCdacNamesWithoutSplittingAtNamespaceDots()
+    {
+        using TempDirectory temp = new();
+        string path = Path.Combine(temp.Path, "Thread.md");
+        File.WriteAllText(path,
+            "<!-- BEGIN GENERATED: data-descriptors contract=Thread version=c1 -->\n" +
+            "<!-- END GENERATED: data-descriptors contract=Thread version=c1 -->");
+        UsageGraph graph = new(
+            "",
+            1,
+            [],
+            new Dictionary<(ContractLabel, string), IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>>
+            {
+                [(new ContractLabel("IThread", "c1"), "Data.System.Threading.Lock")] =
+                    new Dictionary<string, IReadOnlyCollection<UsageKind>>
+                    {
+                        ["_state"] = new[] { UsageKind.Read },
+                    },
+            },
+            new Dictionary<ContractLabel, IReadOnlyCollection<string>>());
+
+        new DocGenerator(graph, DocDescriptorMeanings.Empty).Emit(temp.Path);
+
+        string generated = File.ReadAllText(path);
+        Assert.Contains("| `System.Threading.Lock` | `_state` | _TODO: describe_ |", generated);
+    }
+
     private static UsageGraph EmptyGraph() => new(
         "",
         0,

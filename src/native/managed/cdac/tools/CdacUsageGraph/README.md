@@ -18,7 +18,7 @@ which of their `[Field]` descriptor fields the contract implementation uses.
    therefore includes the same generated Data constructors, `IData<T>.Create`
    factories, `Write<Property>` methods and helper types as the product build.
 2. Parses `CoreCLRContracts.Register` to map `(interface, version) -> impl type`.
-3. Discovers `Data.*` types (`[CdacType]` / `IData<T>`) and their
+3. Discovers real `IData<TSelf>` Data types and their
    `[Field]`/`[FieldAddress]` properties.
 4. Performs a **forward interprocedural walk** from each contract impl's members
    (methods, constructors, and **field/property initializers**), propagating a
@@ -54,9 +54,11 @@ which of their `[Field]` descriptor fields the contract implementation uses.
    type. Parsed aggregate properties declared through `MemberNotNull`/`OnInit`
    (e.g. `EETypeHashTable.Entries`) are replaced by those actual underlying fields.
    Constructor-derived aggregates (e.g. Loader's `DynamicILBlobTable.HashTable`) are
-   handled similarly. Reports use the native `DataType` descriptor name when an
-   adapter C# class has a different name (`DynamicILBlobEntry` ->
-   `DynamicILBlobTable`).
+   handled similarly. Each Data type has one ordered cDAC name set from
+   `[CdacType]`: the first name is used in reports and all names are available for
+   layout lookup. This handles adapter names (`DynamicILBlobEntry` ->
+   `DynamicILBlobTable`) and managed layout names without requiring a `DataType`
+   enum element.
 
 ## Build & run
 

@@ -102,7 +102,7 @@ internal sealed class DocDescriptorMeanings
 
     private static void ValidateDescriptorKey(string key, string context)
     {
-        int dot = key.IndexOf('.', StringComparison.Ordinal);
+        int dot = key.LastIndexOf('.', StringComparison.Ordinal);
         if (dot <= 0 || dot == key.Length - 1)
             throw new JsonException($"Invalid data-descriptor key '{key}' in {context}; expected 'Type.Field'.");
     }

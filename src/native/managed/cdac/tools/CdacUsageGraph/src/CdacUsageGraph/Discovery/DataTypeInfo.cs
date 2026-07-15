@@ -3,14 +3,13 @@
 
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
 namespace CdacUsageGraph.Discovery;
 
 /// <summary>
-/// Immutable description of one cDAC <c>IData&lt;TSelf&gt;</c> class: its Roslyn symbol, native
-/// descriptor name, and provenance-aware property model.
+/// Immutable description of one cDAC <c>IData&lt;TSelf&gt;</c> class: its Roslyn symbol, cDAC
+/// names, and provenance-aware property model.
 /// </summary>
 internal sealed class DataTypeInfo
 {
@@ -18,25 +17,27 @@ internal sealed class DataTypeInfo
 
     private DataTypeInfo(
         INamedTypeSymbol symbol,
-        string descriptorName,
-        IReadOnlyList<string> layoutNames,
+        IReadOnlyList<string> names,
         Dictionary<IPropertySymbol, DataPropertyInfo> properties)
     {
         Symbol = symbol;
-        DescriptorName = descriptorName;
-        LayoutNames = layoutNames;
+        Names = names;
         _properties = properties;
     }
 
     public INamedTypeSymbol Symbol { get; }
 
-    public string DescriptorName { get; }
+    /// <summary>
+    /// The primary cDAC name, used in reports. This is the first name declared by
+    /// <c>CdacType</c>, or the C# type name when no attribute supplies names.
+    /// </summary>
+    public string Name => Names[0];
 
     /// <summary>
-    /// Layout lookup names declared by <c>CdacType</c>. These can be managed type names and are
-    /// distinct from the canonical <see cref="DescriptorName"/> used in reports.
+    /// Ordered cDAC names usable for layout lookup. The C# type name is included as a fallback.
+    /// No special handling of the <c>DataType</c> enum is required.
     /// </summary>
-    public IReadOnlyList<string> LayoutNames { get; }
+    public IReadOnlyList<string> Names { get; }
 
     public IEnumerable<DataPropertyInfo> Properties => _properties.Values;
 
@@ -48,29 +49,31 @@ internal sealed class DataTypeInfo
         INamedTypeSymbol symbol,
         SymbolEqualityComparer comparer)
     {
-        IReadOnlyList<string> layoutNames = GetLayoutNames(symbol);
-        string descriptorName = GetDescriptorName(compilation, symbol);
+        string[] names = GetNames(symbol);
         Dictionary<IPropertySymbol, DataPropertyInfo> properties =
             new Dictionary<IPropertySymbol, DataPropertyInfo>(comparer);
 
         foreach (IPropertySymbol property in EnumerateProperties(symbol))
-            properties.TryAdd((IPropertySymbol)property.OriginalDefinition,
-                CreatePropertyInfo(compilation, property, comparer));
+            properties.TryAdd(property.OriginalDefinition, CreatePropertyInfo(compilation, property, comparer));
 
-        return new DataTypeInfo(symbol, descriptorName, layoutNames, properties);
+        return new DataTypeInfo(symbol, names, properties);
     }
 
-    private static string[] GetLayoutNames(INamedTypeSymbol symbol)
+    private static string[] GetNames(INamedTypeSymbol symbol)
     {
         AttributeData? attribute = symbol.GetAttributes().FirstOrDefault(
             a => a.AttributeClass?.ToDisplayString() == CdacSymbols.CdacTypeAttributeMetadataName);
         if (attribute is not { ConstructorArguments.Length: > 0 })
-            return [];
+            return [symbol.Name];
 
-        return attribute.ConstructorArguments[0].Values
+        List<string> names = attribute.ConstructorArguments[0].Values
             .Where(value => value.Value is string)
             .Select(value => (string)value.Value!)
-            .ToArray();
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (!names.Contains(symbol.Name, StringComparer.Ordinal))
+            names.Add(symbol.Name);
+        return names.ToArray();
     }
 
     private static IEnumerable<IPropertySymbol> EnumerateProperties(INamedTypeSymbol type)
@@ -82,33 +85,12 @@ internal sealed class DataTypeInfo
         }
     }
 
-    private static string GetDescriptorName(CSharpCompilation compilation, INamedTypeSymbol symbol)
-    {
-        AttributeData? attribute = symbol.GetAttributes().FirstOrDefault(
-            a => a.AttributeClass?.ToDisplayString() == CdacSymbols.CdacTypeAttributeMetadataName);
-        if (attribute?.ApplicationSyntaxReference?.GetSyntax() is not AttributeSyntax syntax ||
-            syntax.ArgumentList?.Arguments.FirstOrDefault() is not { } argument)
-            return symbol.Name;
-
-        SemanticModel model = compilation.GetSemanticModel(syntax.SyntaxTree);
-        if (model.GetOperation(argument.Expression) is INameOfOperation
-            {
-                Argument: IFieldReferenceOperation field,
-            } &&
-            field.Field.ContainingType?.ToDisplayString() == CdacSymbols.DataTypeMetadataName)
-            return field.Field.Name;
-
-        // IData types without an explicit nameof(DataType.X) association can use managed layout
-        // names or no CdacType attribute at all. Their C# name is the stable report identity.
-        return symbol.Name;
-    }
-
     private static DataPropertyInfo CreatePropertyInfo(
         CSharpCompilation compilation,
         IPropertySymbol property,
         SymbolEqualityComparer comparer)
     {
-        IPropertySymbol definition = (IPropertySymbol)property.OriginalDefinition;
+        IPropertySymbol definition = property.OriginalDefinition;
         if (TryGetNativeFieldName(definition, out string? nativeName))
             return new DataPropertyInfo(definition, DataPropertyKind.DirectField, nativeName, []);
 

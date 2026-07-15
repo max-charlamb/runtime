@@ -105,7 +105,7 @@ public sealed class DataTypeIndexTests
     }
 
     [Fact]
-    public void ResolvesDescriptorNameToDataClass()
+    public void ResolvesCdacNameToDataClass()
     {
         (CSharpCompilation compilation, INamedTypeSymbol widget) = BuildWidget();
         DataTypeIndex index = DataTypeIndex.Build(compilation);
@@ -115,7 +115,7 @@ public sealed class DataTypeIndexTests
     }
 
     [Fact]
-    public void UsesNativeDescriptorNameWhenItDiffersFromClassName()
+    public void UsesFirstCdacNameWhenItDiffersFromClassName()
     {
         const string source = """
             namespace Microsoft.Diagnostics.DataContractReader
@@ -139,7 +139,7 @@ public sealed class DataTypeIndexTests
             }
             """;
         CSharpCompilation compilation = CSharpCompilation.Create(
-            "DescriptorNameTest",
+            "CdacNameTest",
             [CSharpSyntaxTree.ParseText(source)],
             RuntimeReferences(),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
@@ -149,12 +149,12 @@ public sealed class DataTypeIndexTests
         DataTypeIndex index = DataTypeIndex.Build(compilation);
 
         Assert.True(index.TryGetDataType(entry, out DataTypeInfo dataType));
-        Assert.Equal("WidgetTable", dataType.DescriptorName);
+        Assert.Equal("WidgetTable", dataType.Name);
 
         INamedTypeSymbol managedLayout = compilation.GetTypeByMetadataName(
             "Microsoft.Diagnostics.DataContractReader.Data.ManagedLayout")!;
         Assert.True(index.TryGetDataType(managedLayout, out DataTypeInfo managedDataType));
-        Assert.Equal("ManagedLayout", managedDataType.DescriptorName);
+        Assert.Equal("Managed.Layout", managedDataType.Name);
         Assert.True(index.TryGetType("Managed.Layout", out DataTypeInfo resolvedManagedType));
         Assert.Equal(managedLayout, resolvedManagedType.Symbol, SymbolEqualityComparer.Default);
     }
