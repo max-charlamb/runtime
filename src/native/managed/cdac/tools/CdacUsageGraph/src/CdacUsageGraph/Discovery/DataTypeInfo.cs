@@ -3,6 +3,7 @@
 
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
 namespace CdacUsageGraph.Discovery;
@@ -116,12 +117,14 @@ internal sealed class DataTypeInfo
     {
         foreach (SyntaxReference reference in property.DeclaringSyntaxReferences)
         {
-            if (reference.GetSyntax() is not Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax declaration)
+            if (reference.GetSyntax() is not PropertyDeclarationSyntax declaration)
                 continue;
             if (declaration.ExpressionBody is not null)
                 return true;
             if (declaration.AccessorList is { } accessors &&
-                accessors.Accessors.Any(a => a.Body is not null || a.ExpressionBody is not null))
+                accessors.Accessors.Any(a =>
+                    a.Kind() == SyntaxKind.GetAccessorDeclaration &&
+                    (a.Body is not null || a.ExpressionBody is not null)))
                 return true;
         }
         return false;
@@ -129,7 +132,7 @@ internal sealed class DataTypeInfo
 
     private static List<ISymbol> OnInitMembersInitializing(IPropertySymbol property)
     {
-        List<ISymbol> members = new();
+        List<ISymbol> members = [];
         foreach (IMethodSymbol method in property.ContainingType
             .GetMembers(CdacSymbols.DataInitializerMethodName).OfType<IMethodSymbol>())
         {

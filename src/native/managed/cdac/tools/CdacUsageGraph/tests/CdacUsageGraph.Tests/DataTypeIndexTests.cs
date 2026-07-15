@@ -197,6 +197,48 @@ public sealed class DataTypeIndexTests
     }
 
     [Fact]
+    public void SetterBodyDoesNotMakeAnAutoGetterComputed()
+    {
+        const string source = """
+            namespace Microsoft.Diagnostics.DataContractReader
+            {
+                public sealed class FieldAttribute : System.Attribute { }
+            }
+            namespace Microsoft.Diagnostics.DataContractReader.Data
+            {
+                public interface IData<T> { }
+
+                public sealed class SetterOnly : IData<SetterOnly>
+                {
+                    [Microsoft.Diagnostics.DataContractReader.Field]
+                    public int Raw { get; private set; }
+
+                    public int Value
+                    {
+                        get;
+                        set { Raw = value; }
+                    }
+                }
+            }
+            """;
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            "SetterBodyPropertyTest",
+            [CSharpSyntaxTree.ParseText(source)],
+            RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        INamedTypeSymbol setterOnly = compilation.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.Data.SetterOnly")!;
+        IPropertySymbol value = (IPropertySymbol)setterOnly.GetMembers("Value").Single();
+
+        DataTypeIndex index = DataTypeIndex.Build(compilation);
+
+        Assert.True(index.TryGetDataType(setterOnly, out DataTypeInfo dataType));
+        DataPropertyInfo property = dataType.GetProperty(value);
+        Assert.Equal(DataPropertyKind.DirectField, property.Kind);
+        Assert.Empty(property.ExpansionMembers);
+    }
+
+    [Fact]
     public void InterfaceComputedPropertyUsesSameProvenanceAsDirectRead()
     {
         const string source = """

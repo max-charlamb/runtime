@@ -320,7 +320,8 @@ internal sealed class UsageWalker
                         yield return exprOp;
                     if (pds.AccessorList is not { } accessors)
                         break;
-                    foreach (AccessorDeclarationSyntax accessor in accessors.Accessors)
+                    foreach (AccessorDeclarationSyntax accessor in accessors.Accessors.Where(a =>
+                        a.Kind() == Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration))
                     {
                         SyntaxNode? body = (SyntaxNode?)accessor.Body ?? accessor.ExpressionBody?.Expression;
                         if (body is not null && model.GetOperation(body) is { } accessorOp)
