@@ -3,6 +3,7 @@
 
 using CdacUsageGraph.Model;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Operations;
 
 namespace CdacUsageGraph.Discovery;
@@ -14,8 +15,7 @@ namespace CdacUsageGraph.Discovery;
 /// </summary>
 internal static class ContractRegistrationParser
 {
-    public static IReadOnlyList<ContractRegistration> Parse(
-        Microsoft.CodeAnalysis.CSharp.CSharpCompilation compilation)
+    public static IReadOnlyList<ContractRegistration> Parse(CSharpCompilation compilation)
     {
         SymbolEqualityComparer comparer = SymbolEqualityComparer.Default;
         List<ContractRegistration> registrations = new List<ContractRegistration>();
@@ -44,13 +44,13 @@ internal static class ContractRegistrationParser
                     if (inv.TargetMethod.Name != CdacSymbols.ContractRegistrationMethodName)
                         continue;
                     if (inv.Instance?.Type is not INamedTypeSymbol receiver ||
-                        !IsAssignableTo(compilation, receiver, contractRegistry))
+                        !compilation.IsAssignableTo(receiver, contractRegistry))
                         continue;
                     if (inv.TargetMethod.TypeArguments.Length != 1)
                         continue;
                     if (inv.TargetMethod.TypeArguments[0] is not INamedTypeSymbol iface)
                         continue;
-                    if (!IsAssignableTo(compilation, iface, iContract))
+                    if (!compilation.IsAssignableTo(iface, iContract))
                         continue;
 
                     string? version = inv.Arguments
@@ -65,8 +65,8 @@ internal static class ContractRegistrationParser
                     {
                         if (create.Type is INamedTypeSymbol impl &&
                             comparer.Equals(impl.ContainingAssembly, compilation.Assembly) &&
-                            IsAssignableTo(compilation, impl, iface) &&
-                            IsAssignableTo(compilation, impl, iContract))
+                            compilation.IsAssignableTo(impl, iface) &&
+                            compilation.IsAssignableTo(impl, iContract))
                         {
                             registrations.Add(new ContractRegistration(iface.Name, version, impl));
                         }
@@ -82,12 +82,4 @@ internal static class ContractRegistrationParser
             .ToList();
     }
 
-    // Roslyn's implicit conversion classification covers identity, class inheritance, interface
-    // inheritance, and class-to-implemented-interface conversion. It is more complete than
-    // manually comparing BaseType and AllInterfaces, including generic/variance cases.
-    private static bool IsAssignableTo(
-        Microsoft.CodeAnalysis.CSharp.CSharpCompilation compilation,
-        ITypeSymbol source,
-        ITypeSymbol target) =>
-        compilation.ClassifyConversion(source, target).IsImplicit;
 }
