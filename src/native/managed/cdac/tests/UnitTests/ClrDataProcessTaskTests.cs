@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
+using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.DataContractReader.Contracts;
 using Microsoft.Diagnostics.DataContractReader.Legacy;
 using Microsoft.Diagnostics.DataContractReader.TestInfrastructure;
@@ -30,6 +31,14 @@ public unsafe class ClrDataProcessTaskTests
         ulong handle;
         Assert.Equal(HResults.S_OK, process.StartEnumTasks(&handle));
         Assert.NotEqual(0u, handle);
+        GCHandle enumHandle = GCHandle.FromIntPtr((nint)handle);
+        Assert.IsAssignableFrom<IEnum<TargetPointer>>(enumHandle.Target);
+
+        ulong initialHandle = handle;
+        Assert.Equal(
+            HResults.E_POINTER,
+            process.EnumTask(&handle, new DacComNullableByRef<IXCLRDataTask>(isNullRef: true)));
+        Assert.Equal(initialHandle, handle);
 
         DacComNullableByRef<IXCLRDataTask> taskOut = new(isNullRef: false);
         Assert.Equal(HResults.S_OK, process.EnumTask(&handle, taskOut));
@@ -48,6 +57,7 @@ public unsafe class ClrDataProcessTaskTests
             HResults.S_FALSE,
             process.EnumTask(&handle, new DacComNullableByRef<IXCLRDataTask>(isNullRef: true)));
         Assert.Equal(HResults.S_OK, process.EndEnumTasks(handle));
+        Assert.Equal(HResults.S_OK, process.EndEnumTasks(0));
     }
 
     [Fact]
@@ -60,6 +70,7 @@ public unsafe class ClrDataProcessTaskTests
         ulong handle = ulong.MaxValue;
         Assert.Equal(HResults.S_FALSE, process.StartEnumTasks(&handle));
         Assert.Equal(0u, handle);
+        Assert.Equal(HResults.S_OK, process.EndEnumTasks(handle));
     }
 
     [Fact]

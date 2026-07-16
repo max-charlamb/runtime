@@ -19,16 +19,56 @@ namespace Microsoft.Diagnostics.DataContractReader.Legacy;
 /// </summary>
 public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProcess2
 {
-    private sealed class EnumTasks
+    private sealed class EnumTasks : IEnum<TargetPointer>
     {
-        public TargetPointer CurrentThread;
-        public ulong LegacyHandle;
+        public IEnumerator<TargetPointer> Enumerator { get; }
+        public nuint LegacyHandle { get; set; }
+        public int Remaining { get; private set; }
 
-        public EnumTasks(TargetPointer currentThread, ulong legacyHandle)
+        public EnumTasks(List<TargetPointer> threads, ulong legacyHandle)
         {
-            CurrentThread = currentThread;
-            LegacyHandle = legacyHandle;
+            Enumerator = threads.GetEnumerator();
+            LegacyHandle = (nuint)legacyHandle;
+            Remaining = threads.Count;
         }
+
+        public bool MoveNext()
+        {
+            if (!Enumerator.MoveNext())
+                return false;
+
+            Remaining--;
+            return true;
+        }
+    }
+
+    private void DisposeTaskEnumeration(EnumTasks tasks, GCHandle gcHandle)
+    {
+        int hrLocal = HResults.S_OK;
+        try
+        {
+            if (_legacyProcess is not null)
+            {
+                // The legacy call is validation and counterpart cleanup, not fallback behavior.
+                nuint legacyHandle = tasks.LegacyHandle;
+                tasks.LegacyHandle = 0;
+                hrLocal = _legacyProcess.EndEnumTasks((ulong)legacyHandle);
+            }
+        }
+        catch (System.Exception ex)
+        {
+            hrLocal = ex.HResult;
+        }
+        finally
+        {
+            ((IEnum<TargetPointer>)tasks).Dispose();
+            gcHandle.Free();
+        }
+
+#if DEBUG
+        if (_legacyProcess is not null)
+            Debug.ValidateHResult(HResults.S_OK, hrLocal);
+#endif
     }
 
     int IXCLRDataProcess.Flush()
@@ -56,15 +96,23 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
                 throw new NullReferenceException();
 
             *handle = 0;
-            TargetPointer firstThread = _target.Contracts.Thread.GetThreadStoreData().FirstThread;
-            if (firstThread == TargetPointer.Null)
+            IThread threadContract = _target.Contracts.Thread;
+            TargetPointer current = threadContract.GetThreadStoreData().FirstThread;
+            if (current == TargetPointer.Null)
             {
                 hr = HResults.S_FALSE;
             }
             else
             {
-                GCHandle gcHandle = GCHandle.Alloc(new EnumTasks(firstThread, legacyHandle));
-                *handle = unchecked((ulong)GCHandle.ToIntPtr(gcHandle).ToInt64());
+                List<TargetPointer> threads = [];
+                while (current != TargetPointer.Null)
+                {
+                    threads.Add(current);
+                    current = threadContract.GetThreadData(current).NextThread;
+                }
+
+                EnumTasks tasks = new(threads, legacyHandle);
+                *handle = unchecked((ulong)((IEnum<TargetPointer>)tasks).GetHandle());
                 legacyHandle = 0;
             }
         }
@@ -101,7 +149,7 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
             else
             {
                 GCHandle gcHandle = GCHandle.FromIntPtr((nint)(*handle));
-                if (gcHandle.Target is not EnumTasks state)
+                if (gcHandle.Target is not EnumTasks tasks)
                     throw new ArgumentException();
 
                 bool outputIsNull = task is null || task.IsNullRef;
@@ -109,24 +157,29 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
                 if (_legacyProcess is not null)
                 {
                     DacComNullableByRef<IXCLRDataTask> legacyTaskOut = new(isNullRef: outputIsNull);
-                    ulong legacyHandle = state.LegacyHandle;
+                    ulong legacyHandle = (ulong)tasks.LegacyHandle;
                     hrLocal = _legacyProcess.EnumTask(&legacyHandle, legacyTaskOut);
-                    state.LegacyHandle = legacyHandle;
+                    tasks.LegacyHandle = (nuint)legacyHandle;
                     legacyTask = legacyTaskOut.Interface;
                 }
                 if (outputIsNull)
                     throw new NullReferenceException();
                 DacComNullableByRef<IXCLRDataTask> taskOutput = task ?? throw new NullReferenceException();
 
-                TargetPointer currentThread = state.CurrentThread;
-                Contracts.ThreadData threadData = _target.Contracts.Thread.GetThreadData(currentThread);
-                taskOutput.Interface = new ClrDataTask(currentThread, _target, legacyTask);
-
-                state.CurrentThread = threadData.NextThread;
-                if (state.CurrentThread == TargetPointer.Null)
+                if (tasks.MoveNext())
                 {
-                    gcHandle.Free();
+                    taskOutput.Interface = new ClrDataTask(tasks.Enumerator.Current, _target, legacyTask);
+                    if (tasks.Remaining == 0)
+                    {
+                        *handle = 0;
+                        DisposeTaskEnumeration(tasks, gcHandle);
+                    }
+                }
+                else
+                {
+                    hr = HResults.S_FALSE;
                     *handle = 0;
+                    DisposeTaskEnumeration(tasks, gcHandle);
                 }
             }
         }
@@ -145,18 +198,15 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
     int IXCLRDataProcess.EndEnumTasks(ulong handle)
     {
         int hr = HResults.S_OK;
-        int hrLocal = HResults.S_OK;
         try
         {
             if (handle != 0)
             {
                 GCHandle gcHandle = GCHandle.FromIntPtr((nint)handle);
-                if (gcHandle.Target is not EnumTasks state)
+                if (gcHandle.Target is not EnumTasks tasks)
                     throw new ArgumentException();
 
-                gcHandle.Free();
-                if (_legacyProcess is not null)
-                    hrLocal = _legacyProcess.EndEnumTasks(state.LegacyHandle);
+                DisposeTaskEnumeration(tasks, gcHandle);
             }
         }
         catch (System.Exception ex)
@@ -166,10 +216,6 @@ public sealed unsafe partial class SOSDacImpl : IXCLRDataProcess, IXCLRDataProce
             hr = HResults.S_OK;
         }
 
-#if DEBUG
-        if (_legacyProcess is not null)
-            Debug.ValidateHResult(hr, hrLocal);
-#endif
         return hr;
     }
 
