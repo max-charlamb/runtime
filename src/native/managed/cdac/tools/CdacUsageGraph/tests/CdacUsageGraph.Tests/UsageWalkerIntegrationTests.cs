@@ -3,6 +3,7 @@
 
 using System.Text.Json;
 using CdacUsageGraph.Analysis.DataFlow;
+using CdacUsageGraph.Analysis.DataFlow.Framework;
 using CdacUsageGraph.Analysis;
 using CdacUsageGraph.Compilation;
 using CdacUsageGraph.Discovery;
@@ -105,7 +106,7 @@ public sealed class UsageWalkerIntegrationTests
             .Single(type => type.Name == "DacStreams_1_Data");
         IMethodSymbol implementation = Assert.IsAssignableFrom<IMethodSymbol>(
             GenericDispatch.FindDataFactory(dataType));
-        DataFlowTypeInfoResolver resolver = new(workspace);
+        ProvenanceResolver resolver = new(workspace);
 
         Assert.Contains(
             new GlobalAccessEffect(
@@ -145,19 +146,19 @@ public sealed class UsageWalkerIntegrationTests
             parameter => parameter.Name == "typeInfo");
         IParameterSymbol fieldNameParameter = method.Parameters.Single(
             parameter => parameter.Name == "fieldName");
-        Dictionary<IParameterSymbol, ProvenanceValue> entryValues =
+        Dictionary<IParameterSymbol, DescriptorProvenanceValue> entryValues =
             new(SymbolEqualityComparer.Default)
             {
-                [typeInfoParameter] = ProvenanceValue.FromTypeInfo(TypeInfoValue.Known("Widget")),
-                [fieldNameParameter] = ProvenanceValue.FromString(StringValue.Known("Value")),
+                [typeInfoParameter] = DescriptorProvenanceValue.FromTypeInfo(FiniteSetValue<DescriptorName>.Known(new DescriptorName("Widget"))),
+                [fieldNameParameter] = DescriptorProvenanceValue.FromString(FiniteSetValue<string>.Known("Value")),
             };
 
-        TypeInfoFlowResult result = new TypeInfoDataFlowAnalysis(
+        FlowResult<DescriptorProvenanceValue, CdacEffect> result = new ProvenanceDataFlowAnalysis(
             CdacApiSymbols.Build(workspace)).Analyze(rootOperation, entryValues);
         UsageKind expectedUsage = Enum.Parse<UsageKind>(expectedUsageName);
 
         Assert.Contains(
-            new FieldAccessEffect(new FieldIdentity("Widget", "Value"), expectedUsage),
+            new FieldAccessEffect(new FieldIdentity(new DescriptorName("Widget"), "Value"), expectedUsage),
             result.Effects);
     }
 

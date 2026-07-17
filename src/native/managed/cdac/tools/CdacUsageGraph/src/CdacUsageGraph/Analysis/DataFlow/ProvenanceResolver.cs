@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using CdacUsageGraph.Analysis.DataFlow.Framework;
 using CdacUsageGraph.Compilation;
 using CdacUsageGraph.Discovery;
 using Microsoft.CodeAnalysis;
@@ -9,16 +10,18 @@ using Microsoft.CodeAnalysis.Operations;
 namespace CdacUsageGraph.Analysis.DataFlow;
 
 /// <summary>
-/// Flow-sensitive TypeInfo resolver with on-demand interprocedural parameter and field sources.
-/// Call arguments feed parameters, interface parameters feed concrete implementations, and field
-/// assignments feed later field loads. No whole-assembly symbol/name union is required.
+/// Flow-sensitive cDAC provenance resolver with on-demand interprocedural parameter and field
+/// sources. Call arguments feed parameters, interface parameters feed concrete implementations,
+/// and field assignments feed later field loads. No whole-assembly symbol/name union is required.
 /// </summary>
-internal sealed class DataFlowTypeInfoResolver
+internal sealed class ProvenanceResolver
 {
     private readonly CdacAnalysisWorkspace _workspace;
     private readonly CdacApiSymbols _apiSymbols;
-    private readonly Dictionary<ISymbol, TypeInfoFlowResult?> _results =
+    private readonly Dictionary<ISymbol, FlowResult<DescriptorProvenanceValue, CdacEffect>?> _results =
         new(SymbolEqualityComparer.Default);
+    private readonly Dictionary<MethodAnalysisKey, FlowResult<DescriptorProvenanceValue, CdacEffect>?>
+        _methodResults = new();
     private readonly HashSet<ISymbol> _activeMethods =
         new(SymbolEqualityComparer.Default);
     private readonly Dictionary<IParameterSymbol, List<IOperation>> _parameterSources =
@@ -27,10 +30,11 @@ internal sealed class DataFlowTypeInfoResolver
         new(SymbolEqualityComparer.Default);
     private readonly Dictionary<IFieldSymbol, List<IOperation>> _fieldSources =
         new(SymbolEqualityComparer.Default);
-    private readonly Dictionary<ISymbol, TypeInfoValue> _symbolValues =
+    private readonly Dictionary<ISymbol, FiniteSetValue<DescriptorName>> _symbolValues =
         new(SymbolEqualityComparer.Default);
+    private long _cycleVersion;
 
-    public DataFlowTypeInfoResolver(CdacAnalysisWorkspace workspace)
+    public ProvenanceResolver(CdacAnalysisWorkspace workspace)
     {
         _workspace = workspace;
         _apiSymbols = CdacApiSymbols.Build(workspace);
@@ -43,32 +47,28 @@ internal sealed class DataFlowTypeInfoResolver
         if (expression is null)
             return [];
 
-        TypeInfoFlowResult? result = GetResult(expression);
-        TypeInfoValue value = result?.GetValue(expression) ?? TypeInfoValue.Bottom;
-        return value.IsUnknown ? [] : value.Names;
+        FlowResult<DescriptorProvenanceValue, CdacEffect>? result = GetResult(expression);
+        FiniteSetValue<DescriptorName> value = result?.GetValue(expression).TypeInfo ??
+            FiniteSetValue<DescriptorName>.Bottom;
+        return value.IsUnknown ? [] : value.Values.Select(name => name.Value).ToArray();
     }
 
-    public IReadOnlyCollection<FieldAccessEffect> GetFieldAccessEffects(ISymbol member)
+    public IReadOnlyCollection<CdacEffect> GetEffects(ISymbol member) =>
+        GetResult(NormalizeMember(member))?.Effects ?? [];
+
+    public IReadOnlyCollection<FieldAccessEffect> GetFieldAccessEffects(ISymbol member) =>
+        GetEffects(member).OfType<FieldAccessEffect>().ToArray();
+
+    public IReadOnlyCollection<GlobalAccessEffect> GetGlobalAccessEffects(ISymbol member) =>
+        GetEffects(member).OfType<GlobalAccessEffect>().ToArray();
+
+    private static ISymbol NormalizeMember(ISymbol member) => member switch
     {
-        ISymbol analysisMember = member switch
-        {
-            IPropertySymbol property when property.GetMethod is not null => property.GetMethod,
-            _ => member,
-        };
-        return GetResult(analysisMember)?.Effects ?? [];
-    }
+        IPropertySymbol property when property.GetMethod is not null => property.GetMethod,
+        _ => member,
+    };
 
-    public IReadOnlyCollection<GlobalAccessEffect> GetGlobalAccessEffects(ISymbol member)
-    {
-        ISymbol analysisMember = member switch
-        {
-            IPropertySymbol property when property.GetMethod is not null => property.GetMethod,
-            _ => member,
-        };
-        return GetResult(analysisMember)?.GlobalEffects ?? [];
-    }
-
-    private TypeInfoFlowResult? GetResult(IOperation expression)
+    private FlowResult<DescriptorProvenanceValue, CdacEffect>? GetResult(IOperation expression)
     {
         if (!_workspace.TryGetSemanticModel(expression.Syntax.SyntaxTree, out SemanticModel model))
             return null;
@@ -77,50 +77,59 @@ internal sealed class DataFlowTypeInfoResolver
             .OriginalDefinition;
         if (containingSymbol is null)
             return null;
-        if (containingSymbol is IPropertySymbol property)
-            containingSymbol = property.GetMethod?.OriginalDefinition ?? containingSymbol;
-        return GetResult(containingSymbol);
+        return GetResult(NormalizeMember(containingSymbol));
     }
 
-    private TypeInfoFlowResult? GetResult(ISymbol containingSymbol)
+    private FlowResult<DescriptorProvenanceValue, CdacEffect>? GetResult(ISymbol containingSymbol)
     {
         containingSymbol = containingSymbol.OriginalDefinition;
-        if (_results.TryGetValue(containingSymbol, out TypeInfoFlowResult? result))
+        if (_results.TryGetValue(containingSymbol, out FlowResult<DescriptorProvenanceValue, CdacEffect>? result))
             return result;
 
         _results.Add(containingSymbol, null);
         result = containingSymbol is IMethodSymbol method
-            ? AnalyzeMethod(method, new Dictionary<IParameterSymbol, ProvenanceValue>(
+            ? AnalyzeMethod(method, new Dictionary<IParameterSymbol, DescriptorProvenanceValue>(
                 SymbolEqualityComparer.Default))
             : null;
         _results[containingSymbol] = result;
         return result;
     }
 
-    private TypeInfoFlowResult? AnalyzeMethod(
+    private FlowResult<DescriptorProvenanceValue, CdacEffect>? AnalyzeMethod(
         IMethodSymbol method,
-        Dictionary<IParameterSymbol, ProvenanceValue> parameterValues)
+        Dictionary<IParameterSymbol, DescriptorProvenanceValue> parameterValues)
     {
         IMethodSymbol implementation = method.PartialImplementationPart ?? method;
-        Dictionary<IParameterSymbol, ProvenanceValue> implementationParameterValues =
+        if (_activeMethods.Contains(implementation.OriginalDefinition))
+        {
+            _cycleVersion++;
+            return null;
+        }
+
+        MethodAnalysisKey key = new(method, parameterValues);
+        if (_methodResults.TryGetValue(key, out FlowResult<DescriptorProvenanceValue, CdacEffect>? cached))
+            return cached;
+
+        long cycleVersion = _cycleVersion;
+        Dictionary<IParameterSymbol, DescriptorProvenanceValue> implementationParameterValues =
             parameterValues;
         if (!SymbolEqualityComparer.Default.Equals(method, implementation) &&
             parameterValues.Count > 0)
         {
-            Dictionary<IParameterSymbol, ProvenanceValue> remapped =
+            Dictionary<IParameterSymbol, DescriptorProvenanceValue> remapped =
                 new(SymbolEqualityComparer.Default);
-            foreach (KeyValuePair<IParameterSymbol, ProvenanceValue> parameter in parameterValues)
+            foreach (KeyValuePair<IParameterSymbol, DescriptorProvenanceValue> parameter in parameterValues)
             {
                 if (parameter.Key.Ordinal < implementation.Parameters.Length)
                     remapped[implementation.Parameters[parameter.Key.Ordinal]] = parameter.Value;
             }
             implementationParameterValues = remapped;
         }
-        if (!_activeMethods.Add(implementation.OriginalDefinition))
-            return null;
+        _activeMethods.Add(implementation.OriginalDefinition);
 
         try
         {
+            FlowResult<DescriptorProvenanceValue, CdacEffect>? result = null;
             foreach (SyntaxReference syntaxReference in implementation.DeclaringSyntaxReferences)
             {
                 if (!_workspace.TryGetSemanticModel(
@@ -128,17 +137,18 @@ internal sealed class DataFlowTypeInfoResolver
                         out SemanticModel model))
                     continue;
 
-                TypeInfoDataFlowAnalysis analysis = new(
+                ProvenanceDataFlowAnalysis analysis = new(
                     _apiSymbols,
                     ResolveOperationSource,
                     ResolveInvocation,
                     ResolveObjectCreation);
                 try
                 {
-                    return analysis.Analyze(
+                    result = analysis.Analyze(
                         syntaxReference.GetSyntax(),
                         model,
                         implementationParameterValues);
+                    break;
                 }
                 catch (ArgumentException)
                 {
@@ -146,7 +156,9 @@ internal sealed class DataFlowTypeInfoResolver
                 }
             }
 
-            return null;
+            if (_cycleVersion == cycleVersion)
+                _methodResults[key] = result;
+            return result;
         }
         finally
         {
@@ -156,7 +168,7 @@ internal sealed class DataFlowTypeInfoResolver
 
     private InvocationFlowResult? ResolveInvocation(
         IInvocationOperation invocation,
-        IReadOnlyDictionary<int, ProvenanceValue> arguments)
+        IReadOnlyDictionary<int, DescriptorProvenanceValue> arguments)
     {
         IMethodSymbol target = invocation.TargetMethod.ReducedFrom ??
             invocation.TargetMethod;
@@ -164,14 +176,14 @@ internal sealed class DataFlowTypeInfoResolver
             return null;
         if (_activeMethods.Contains(target.OriginalDefinition))
         {
+            _cycleVersion++;
             return new InvocationFlowResult(
-                ProvenanceValue.Bottom,
-                new Dictionary<int, ProvenanceValue>(),
-                [],
+                DescriptorProvenanceValue.Bottom,
+                new Dictionary<int, DescriptorProvenanceValue>(),
                 []);
         }
 
-        Dictionary<IParameterSymbol, ProvenanceValue> parameterValues =
+        Dictionary<IParameterSymbol, DescriptorProvenanceValue> parameterValues =
             new(SymbolEqualityComparer.Default);
         if (invocation.TargetMethod.ReducedFrom is not null)
         {
@@ -179,9 +191,9 @@ internal sealed class DataFlowTypeInfoResolver
                 target.Parameters.Length > 0)
             {
                 parameterValues[target.Parameters[0]] =
-                    arguments.GetValueOrDefault(-1, ProvenanceValue.Bottom);
+                    arguments.GetValueOrDefault(-1, DescriptorProvenanceValue.Bottom);
             }
-            foreach (KeyValuePair<int, ProvenanceValue> argument in arguments)
+            foreach (KeyValuePair<int, DescriptorProvenanceValue> argument in arguments)
             {
                 if (argument.Key >= 0 && argument.Key + 1 < target.Parameters.Length)
                     parameterValues[target.Parameters[argument.Key + 1]] = argument.Value;
@@ -189,18 +201,18 @@ internal sealed class DataFlowTypeInfoResolver
         }
         else
         {
-            foreach (KeyValuePair<int, ProvenanceValue> argument in arguments)
+            foreach (KeyValuePair<int, DescriptorProvenanceValue> argument in arguments)
             {
                 if (argument.Key >= 0 && argument.Key < target.Parameters.Length)
                     parameterValues[target.Parameters[argument.Key]] = argument.Value;
             }
         }
 
-        TypeInfoFlowResult? result = AnalyzeMethod(target, parameterValues);
+        FlowResult<DescriptorProvenanceValue, CdacEffect>? result = AnalyzeMethod(target, parameterValues);
         if (result is null)
             return null;
 
-        Dictionary<int, ProvenanceValue> outputs = new();
+        Dictionary<int, DescriptorProvenanceValue> outputs = new();
         foreach (IParameterSymbol parameter in target.Parameters)
         {
             if (parameter.RefKind is RefKind.Out or RefKind.Ref)
@@ -216,44 +228,46 @@ internal sealed class DataFlowTypeInfoResolver
         return new InvocationFlowResult(
             result.ReturnValue,
             outputs,
-            result.Effects,
-            result.GlobalEffects);
+            result.Effects);
     }
 
     private InvocationFlowResult? ResolveObjectCreation(
         IObjectCreationOperation creation,
-        IReadOnlyDictionary<int, ProvenanceValue> arguments)
+        IReadOnlyDictionary<int, DescriptorProvenanceValue> arguments)
     {
         if (creation.Constructor is not IMethodSymbol constructor ||
-            !_workspace.IsAnalyzable(constructor) ||
-            _activeMethods.Contains(constructor.OriginalDefinition))
+            !_workspace.IsAnalyzable(constructor))
         {
             return null;
         }
+        if (_activeMethods.Contains(constructor.OriginalDefinition))
+        {
+            _cycleVersion++;
+            return null;
+        }
 
-        Dictionary<IParameterSymbol, ProvenanceValue> parameterValues =
+        Dictionary<IParameterSymbol, DescriptorProvenanceValue> parameterValues =
             new(SymbolEqualityComparer.Default);
-        foreach (KeyValuePair<int, ProvenanceValue> argument in arguments)
+        foreach (KeyValuePair<int, DescriptorProvenanceValue> argument in arguments)
         {
             if (argument.Key >= 0 && argument.Key < constructor.Parameters.Length)
                 parameterValues[constructor.Parameters[argument.Key]] = argument.Value;
         }
 
-        TypeInfoFlowResult? result = AnalyzeMethod(constructor, parameterValues);
+        FlowResult<DescriptorProvenanceValue, CdacEffect>? result = AnalyzeMethod(constructor, parameterValues);
         return result is null
             ? null
             : new InvocationFlowResult(
                 result.ReturnValue,
-                new Dictionary<int, ProvenanceValue>(),
-                result.Effects,
-                result.GlobalEffects);
+                new Dictionary<int, DescriptorProvenanceValue>(),
+                result.Effects);
     }
 
-    private TypeInfoValue ResolveOperationSource(IOperation operation) =>
+    private FiniteSetValue<DescriptorName> ResolveOperationSource(IOperation operation) =>
         OperationInspector.TargetSymbol(operation) is ISymbol symbol &&
-        _symbolValues.TryGetValue(symbol.OriginalDefinition, out TypeInfoValue? value)
+        _symbolValues.TryGetValue(symbol.OriginalDefinition, out FiniteSetValue<DescriptorName>? value)
             ? value
-            : TypeInfoValue.Bottom;
+            : FiniteSetValue<DescriptorName>.Bottom;
 
     private void StabilizeSymbolValues()
     {
@@ -266,12 +280,14 @@ internal sealed class DataFlowTypeInfoResolver
         for (int iteration = 0; iteration < MaxIterations; iteration++)
         {
             _results.Clear();
+            _methodResults.Clear();
             _activeMethods.Clear();
+            _cycleVersion = 0;
             bool changed = false;
 
             foreach (ISymbol symbol in symbols)
             {
-                TypeInfoValue value = TypeInfoValue.Bottom;
+                FiniteSetValue<DescriptorName> value = FiniteSetValue<DescriptorName>.Bottom;
                 if (symbol is IParameterSymbol parameter)
                 {
                     if (_parameterSources.TryGetValue(parameter, out List<IOperation>? sources))
@@ -285,7 +301,7 @@ internal sealed class DataFlowTypeInfoResolver
                         {
                             if (_symbolValues.TryGetValue(
                                 alias.OriginalDefinition,
-                                out TypeInfoValue? aliasValue))
+                                out FiniteSetValue<DescriptorName>? aliasValue))
                                 value = value.Join(aliasValue);
                         }
                     }
@@ -297,9 +313,9 @@ internal sealed class DataFlowTypeInfoResolver
                         value = AddNames(value, GetTypeInfoDataNames(source));
                 }
 
-                TypeInfoValue previous = _symbolValues.GetValueOrDefault(
-                    symbol, TypeInfoValue.Bottom);
-                TypeInfoValue joined = previous.Join(value);
+                FiniteSetValue<DescriptorName> previous = _symbolValues.GetValueOrDefault(
+                    symbol, FiniteSetValue<DescriptorName>.Bottom);
+                FiniteSetValue<DescriptorName> joined = previous.Join(value);
                 if (!joined.Equals(previous))
                 {
                     _symbolValues[symbol] = joined;
@@ -309,14 +325,13 @@ internal sealed class DataFlowTypeInfoResolver
 
             if (!changed)
             {
-                _results.Clear();
                 _activeMethods.Clear();
                 return;
             }
         }
 
         throw new InvalidOperationException(
-            $"TypeInfo symbol provenance did not converge after {MaxIterations} iterations.");
+            $"cDAC provenance did not converge after {MaxIterations} iterations.");
     }
 
     private void BuildSourceIndex()
@@ -473,12 +488,49 @@ internal sealed class DataFlowTypeInfoResolver
         values.Add(value);
     }
 
-    private static TypeInfoValue AddNames(
-        TypeInfoValue value,
+    private static FiniteSetValue<DescriptorName> AddNames(
+        FiniteSetValue<DescriptorName> value,
         IReadOnlyCollection<string> names)
     {
         foreach (string name in names)
-            value = value.Join(TypeInfoValue.Known(name));
+            value = value.Join(FiniteSetValue<DescriptorName>.Known(new DescriptorName(name)));
         return value;
+    }
+
+    private sealed class MethodAnalysisKey : IEquatable<MethodAnalysisKey>
+    {
+        private readonly IMethodSymbol _method;
+        private readonly DescriptorProvenanceValue[] _parameterValues;
+        private readonly int _hashCode;
+
+        public MethodAnalysisKey(
+            IMethodSymbol method,
+            IReadOnlyDictionary<IParameterSymbol, DescriptorProvenanceValue> parameterValues)
+        {
+            _method = method.OriginalDefinition;
+            _parameterValues = new DescriptorProvenanceValue[method.Parameters.Length];
+
+            HashCode hash = default;
+            hash.Add(_method, SymbolEqualityComparer.Default);
+            foreach (IParameterSymbol parameter in method.Parameters)
+            {
+                DescriptorProvenanceValue value = parameterValues.GetValueOrDefault(
+                    parameter,
+                    DescriptorProvenanceValue.Bottom);
+                _parameterValues[parameter.Ordinal] = value;
+                hash.Add(value);
+            }
+            _hashCode = hash.ToHashCode();
+        }
+
+        public bool Equals(MethodAnalysisKey? other) =>
+            other is not null &&
+            _hashCode == other._hashCode &&
+            SymbolEqualityComparer.Default.Equals(_method, other._method) &&
+            _parameterValues.AsSpan().SequenceEqual(other._parameterValues);
+
+        public override bool Equals(object? obj) => Equals(obj as MethodAnalysisKey);
+
+        public override int GetHashCode() => _hashCode;
     }
 }

@@ -3,6 +3,7 @@
 
 using CdacUsageGraph.Analysis;
 using CdacUsageGraph.Analysis.DataFlow;
+using CdacUsageGraph.Analysis.DataFlow.Framework;
 using CdacUsageGraph.Compilation;
 using CdacUsageGraph.Discovery;
 using CdacUsageGraph.Model;
@@ -469,22 +470,22 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, _, _) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, _, _) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
 
         Assert.Contains(
             new FieldAccessEffect(
-                new FieldIdentity("Widget", "Contains"),
+                new FieldIdentity(new DescriptorName("Widget"), "Contains"),
                 UsageKind.OffsetLookup),
             result.Effects);
         Assert.Contains(
             new FieldAccessEffect(
-                new FieldIdentity("Widget", "Try"),
+                new FieldIdentity(new DescriptorName("Widget"), "Try"),
                 UsageKind.OffsetLookup),
             result.Effects);
         Assert.Contains(
             new FieldAccessEffect(
-                new FieldIdentity("Widget", "Try"),
+                new FieldIdentity(new DescriptorName("Widget"), "Try"),
                 UsageKind.Read),
             result.Effects);
     }
@@ -509,27 +510,27 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, _, _) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, _, _) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
 
         Assert.Contains(
             new GlobalAccessEffect("RequiredPointer", "pointer", IsOptional: false),
-            result.GlobalEffects);
+            result.Effects);
         Assert.Contains(
             new GlobalAccessEffect("OptionalPointer", "pointer", IsOptional: true),
-            result.GlobalEffects);
+            result.Effects);
         Assert.Contains(
             new GlobalAccessEffect("RequiredString", "string", IsOptional: false),
-            result.GlobalEffects);
+            result.Effects);
         Assert.Contains(
             new GlobalAccessEffect("OptionalString", "string", IsOptional: true),
-            result.GlobalEffects);
+            result.Effects);
         Assert.Contains(
             new GlobalAccessEffect("RequiredCount", "uint32", IsOptional: false),
-            result.GlobalEffects);
+            result.Effects);
         Assert.Contains(
             new GlobalAccessEffect("OptionalCount", "int32", IsOptional: true),
-            result.GlobalEffects);
+            result.Effects);
     }
 
     [Fact]
@@ -549,7 +550,7 @@ public sealed class DataTypeIndexTests
             }
             """;
         CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
-        DataFlowTypeInfoResolver resolver = new(
+        ProvenanceResolver resolver = new(
             new CdacAnalysisWorkspace(compilation, [compilation]));
         IMethodSymbol read = compilation.GetTypeByMetadataName("Example.User")!
             .GetMembers("Read")
@@ -587,15 +588,15 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, _, _) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, _, _) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
 
         Assert.Contains(
             new GlobalAccessEffect("FirstGlobal", "pointer", IsOptional: false),
-            result.GlobalEffects);
+            result.Effects);
         Assert.Contains(
             new GlobalAccessEffect("SecondGlobal", "pointer", IsOptional: false),
-            result.GlobalEffects);
+            result.Effects);
     }
 
     [Fact]
@@ -615,7 +616,7 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, _, _) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, _, _) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
 
         Assert.Contains(
@@ -623,7 +624,7 @@ public sealed class DataTypeIndexTests
                 "<FrameType>Identifier",
                 "pointer",
                 IsOptional: true),
-            result.GlobalEffects);
+            result.Effects);
     }
 
     [Fact]
@@ -639,7 +640,7 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, _, _) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, _, _) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
 
         Assert.Contains(
@@ -647,7 +648,7 @@ public sealed class DataTypeIndexTests
                 "<prefix>Identifier",
                 "pointer",
                 IsOptional: false),
-            result.GlobalEffects);
+            result.Effects);
     }
 
     [Fact]
@@ -678,7 +679,7 @@ public sealed class DataTypeIndexTests
         UsageGraph graph = new UsageWalker(
             compilation,
             DataTypeIndex.Build(compilation),
-            new DataFlowTypeInfoResolver(workspace)).Walk(
+            new ProvenanceResolver(workspace)).Walk(
                 [new ContractRegistration("ITest", "c1", implementation)],
                 "");
         GlobalUsageInfo usage = graph.GlobalUsage[
@@ -708,15 +709,15 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, IMethodSymbol method, SemanticModel model) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, IMethodSymbol method, SemanticModel model) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
         IOperation body = model.GetOperation(method.DeclaringSyntaxReferences[0].GetSyntax())!;
         IInvocationOperation[] uses = body.DescendantsAndSelf().OfType<IInvocationOperation>()
             .Where(invocation => invocation.TargetMethod.Name == "Use")
             .ToArray();
 
-        Assert.Equal(["First"], result.GetValue(uses[0].Arguments[0].Value).Names);
-        Assert.Equal(["Second"], result.GetValue(uses[1].Arguments[0].Value).Names);
+        Assert.Equal(["First"], result.GetValue(uses[0].Arguments[0].Value).TypeInfo.Values.Select(name => name.Value));
+        Assert.Equal(["Second"], result.GetValue(uses[1].Arguments[0].Value).TypeInfo.Values.Select(name => name.Value));
     }
 
     [Fact]
@@ -741,7 +742,7 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, IMethodSymbol method, SemanticModel model) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, IMethodSymbol method, SemanticModel model) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
         IOperation body = model.GetOperation(method.DeclaringSyntaxReferences[0].GetSyntax())!;
         IInvocationOperation use = body.DescendantsAndSelf().OfType<IInvocationOperation>()
@@ -749,7 +750,7 @@ public sealed class DataTypeIndexTests
 
         Assert.Equal(
             ["First", "Second"],
-            result.GetValue(use.Arguments[0].Value).Names.OrderBy(name => name, StringComparer.Ordinal));
+            result.GetValue(use.Arguments[0].Value).TypeInfo.Values.Select(name => name.Value).OrderBy(name => name, StringComparer.Ordinal));
     }
 
     [Fact]
@@ -774,7 +775,7 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, IMethodSymbol method, SemanticModel model) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, IMethodSymbol method, SemanticModel model) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
         IOperation body = model.GetOperation(method.DeclaringSyntaxReferences[0].GetSyntax())!;
         IInvocationOperation use = body.DescendantsAndSelf().OfType<IInvocationOperation>()
@@ -782,7 +783,7 @@ public sealed class DataTypeIndexTests
 
         Assert.Equal(
             ["First", "Second"],
-            result.GetValue(use.Arguments[0].Value).Names.OrderBy(name => name, StringComparer.Ordinal));
+            result.GetValue(use.Arguments[0].Value).TypeInfo.Values.Select(name => name.Value).OrderBy(name => name, StringComparer.Ordinal));
     }
 
     [Fact]
@@ -808,13 +809,13 @@ public sealed class DataTypeIndexTests
         IOperation secondRoot = model.GetOperation(secondMethod.DeclaringSyntaxReferences[0].GetSyntax())!;
         IInvocationOperation firstUse = firstRoot.DescendantsAndSelf().OfType<IInvocationOperation>()
             .Single(invocation => invocation.TargetMethod.Name == "Use");
-        TypeInfoDataFlowAnalysis analysis = new(
+        ProvenanceDataFlowAnalysis analysis = new(
             CdacApiSymbols.Build(new CdacAnalysisWorkspace(compilation, [compilation])));
 
-        TypeInfoFlowResult firstResult = analysis.Analyze(firstRoot);
+        FlowResult<DescriptorProvenanceValue, CdacEffect> firstResult = analysis.Analyze(firstRoot);
         _ = analysis.Analyze(secondRoot);
 
-        Assert.Equal(["First"], firstResult.GetValue(firstUse.Arguments[0].Value).Names);
+        Assert.Equal(["First"], firstResult.GetValue(firstUse.Arguments[0].Value).TypeInfo.Values.Select(name => name.Value));
     }
 
     [Fact]
@@ -835,13 +836,13 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, IMethodSymbol method, SemanticModel model) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, IMethodSymbol method, SemanticModel model) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
         IOperation body = model.GetOperation(method.DeclaringSyntaxReferences[0].GetSyntax())!;
         IInvocationOperation use = body.DescendantsAndSelf().OfType<IInvocationOperation>()
             .Single(invocation => invocation.TargetMethod.Name == "Use");
 
-        Assert.Equal(["First"], result.GetValue(use.Arguments[0].Value).Names);
+        Assert.Equal(["First"], result.GetValue(use.Arguments[0].Value).TypeInfo.Values.Select(name => name.Value));
     }
 
     [Fact]
@@ -867,13 +868,13 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, IMethodSymbol method, SemanticModel model) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, IMethodSymbol method, SemanticModel model) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
         IOperation body = model.GetOperation(method.DeclaringSyntaxReferences[0].GetSyntax())!;
         IInvocationOperation use = body.DescendantsAndSelf().OfType<IInvocationOperation>()
             .Single(invocation => invocation.TargetMethod.Name == "Use");
 
-        Assert.Empty(result.GetValue(use.Arguments[0].Value).Names);
+        Assert.Empty(result.GetValue(use.Arguments[0].Value).TypeInfo.Values.Select(name => name.Value));
     }
 
     [Fact]
@@ -889,11 +890,11 @@ public sealed class DataTypeIndexTests
                 }
             }
             """;
-        (TypeInfoFlowResult result, _, _) =
+        (FlowResult<DescriptorProvenanceValue, CdacEffect> result, _, _) =
             AnalyzeTypeInfoFlow(source, "Example.User", "Read");
 
         Assert.Contains(
-            new FieldAccessEffect(new FieldIdentity("Widget", "Size"), UsageKind.Read),
+            new FieldAccessEffect(new FieldIdentity(new DescriptorName("Widget"), "Size"), UsageKind.Read),
             result.Effects);
     }
 
@@ -920,7 +921,7 @@ public sealed class DataTypeIndexTests
             """;
         CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
         CdacAnalysisWorkspace workspace = new(compilation, [compilation]);
-        DataFlowTypeInfoResolver resolver = new(workspace);
+        ProvenanceResolver resolver = new(workspace);
         IMethodSymbol read = compilation.GetTypeByMetadataName("Example.User")!
             .GetMembers("Read").OfType<IMethodSymbol>().Single();
         SemanticModel model = compilation.GetSemanticModel(
@@ -930,6 +931,43 @@ public sealed class DataTypeIndexTests
             .Single(invocation => invocation.TargetMethod.Name == "Use");
 
         Assert.Equal(["First"], resolver.GetTypeInfoDataNames(use.Arguments[0].Value));
+    }
+
+    [Fact]
+    public void ProvenanceCacheDoesNotReuseCycleTruncatedResults()
+    {
+        const string source = """
+            namespace Example
+            {
+                public sealed class User
+                {
+                    public static void A(Target target)
+                    {
+                        _ = target.GetTypeInfo("Widget").Fields["Value"].Offset;
+                        B(target);
+                    }
+
+                    public static void B(Target target)
+                        => A(target);
+
+                    public static void C(Target target)
+                        => B(target);
+                }
+            }
+            """;
+        CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
+        CdacAnalysisWorkspace workspace = new(compilation, [compilation]);
+        ProvenanceResolver resolver = new(workspace);
+        INamedTypeSymbol user = compilation.GetTypeByMetadataName("Example.User")!;
+        IMethodSymbol a = user.GetMembers("A").OfType<IMethodSymbol>().Single();
+        IMethodSymbol c = user.GetMembers("C").OfType<IMethodSymbol>().Single();
+
+        Assert.NotEmpty(resolver.GetFieldAccessEffects(a));
+        Assert.Contains(
+            new FieldAccessEffect(
+                new FieldIdentity(new DescriptorName("Widget"), "Value"),
+                UsageKind.OffsetLookup),
+            resolver.GetFieldAccessEffects(c));
     }
 
     [Fact]
@@ -955,7 +993,7 @@ public sealed class DataTypeIndexTests
             """;
         CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
         CdacAnalysisWorkspace workspace = new(compilation, [compilation]);
-        DataFlowTypeInfoResolver resolver = new(workspace);
+        ProvenanceResolver resolver = new(workspace);
         IMethodSymbol read = compilation.GetTypeByMetadataName("Example.User")!
             .GetMembers("Read").OfType<IMethodSymbol>().Single();
         SemanticModel model = compilation.GetSemanticModel(
@@ -991,7 +1029,7 @@ public sealed class DataTypeIndexTests
             """;
         CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
         CdacAnalysisWorkspace workspace = new(compilation, [compilation]);
-        DataFlowTypeInfoResolver resolver = new(workspace);
+        ProvenanceResolver resolver = new(workspace);
         IMethodSymbol forward = compilation.GetTypeByMetadataName("Example.User")!
             .GetMembers("Forward")
             .OfType<IMethodSymbol>()
@@ -1039,7 +1077,7 @@ public sealed class DataTypeIndexTests
             }
             """;
         CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
-        DataFlowTypeInfoResolver resolver = new(
+        ProvenanceResolver resolver = new(
             new CdacAnalysisWorkspace(compilation, [compilation]));
         IMethodSymbol forward = compilation.GetTypeByMetadataName("Example.Derived")!
             .GetMembers("Forward")
@@ -1075,7 +1113,7 @@ public sealed class DataTypeIndexTests
             }
             """;
         CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
-        DataFlowTypeInfoResolver resolver = new(
+        ProvenanceResolver resolver = new(
             new CdacAnalysisWorkspace(compilation, [compilation]));
         IMethodSymbol forward = compilation.GetTypeByMetadataName("Example.Extensions")!
             .GetMembers("Forward")
@@ -1112,7 +1150,7 @@ public sealed class DataTypeIndexTests
             """;
         CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
         CdacAnalysisWorkspace workspace = new(compilation, [compilation]);
-        DataFlowTypeInfoResolver resolver = new(workspace);
+        ProvenanceResolver resolver = new(workspace);
         IMethodSymbol read = compilation.GetTypeByMetadataName("Example.User")!
             .GetMembers("Read")
             .OfType<IMethodSymbol>()
@@ -1169,7 +1207,7 @@ public sealed class DataTypeIndexTests
             """;
         CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
         CdacAnalysisWorkspace workspace = new(compilation, [compilation]);
-        DataFlowTypeInfoResolver resolver = new(workspace);
+        ProvenanceResolver resolver = new(workspace);
         IMethodSymbol read = compilation.GetTypeByMetadataName("Example.User")!
             .GetMembers("Read").OfType<IMethodSymbol>().Single();
         SemanticModel model = compilation.GetSemanticModel(
@@ -1181,7 +1219,7 @@ public sealed class DataTypeIndexTests
         Assert.Equal(["First"], resolver.GetTypeInfoDataNames(use.Arguments[0].Value));
     }
 
-    private static (TypeInfoFlowResult Result, IMethodSymbol Method, SemanticModel Model) AnalyzeTypeInfoFlow(
+    private static (FlowResult<DescriptorProvenanceValue, CdacEffect> Result, IMethodSymbol Method, SemanticModel Model) AnalyzeTypeInfoFlow(
         string source,
         string typeName,
         string methodName)
@@ -1197,7 +1235,7 @@ public sealed class DataTypeIndexTests
 
         CdacApiSymbols apiSymbols = CdacApiSymbols.Build(
             new CdacAnalysisWorkspace(compilation, [compilation]));
-        return (new TypeInfoDataFlowAnalysis(apiSymbols).Analyze(root), method, model);
+        return (new ProvenanceDataFlowAnalysis(apiSymbols).Analyze(root), method, model);
     }
 
     private static CSharpCompilation CreateTypeInfoFlowCompilation(string source) =>
@@ -1389,7 +1427,7 @@ public sealed class DataTypeIndexTests
         UsageGraph graph = new UsageWalker(
             compilation,
             index,
-            new DataFlowTypeInfoResolver(workspace)).Walk(
+            new ProvenanceResolver(workspace)).Walk(
                 [
                     new ContractRegistration(
                         "IFirst",

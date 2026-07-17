@@ -21,7 +21,7 @@ internal sealed class UsageWalker
 {
     private readonly CSharpCompilation _compilation;
     private readonly DataTypeIndex _index;
-    private readonly DataFlowTypeInfoResolver? _dataFlowResolver;
+    private readonly ProvenanceResolver? _dataFlowResolver;
     private readonly NativeDescriptorFieldTypeIndex _nativeFieldTypes;
     private readonly SymbolEqualityComparer _cmp = SymbolEqualityComparer.Default;
 
@@ -34,7 +34,7 @@ internal sealed class UsageWalker
     public UsageWalker(
         CSharpCompilation compilation,
         DataTypeIndex index,
-        DataFlowTypeInfoResolver dataFlowResolver,
+        ProvenanceResolver dataFlowResolver,
         NativeDescriptorFieldTypeIndex? nativeFieldTypes = null)
     {
         _compilation = compilation;
@@ -156,31 +156,36 @@ internal sealed class UsageWalker
         if (_dataFlowResolver is null)
             return;
 
-        foreach (FieldAccessEffect effect in _dataFlowResolver.GetFieldAccessEffects(member))
+        foreach (CdacEffect effect in _dataFlowResolver.GetEffects(member))
         {
-            string dataName = _index.TryGetType(effect.Field.TypeName, out DataTypeInfo dataType)
-                ? DataName(dataType)
-                : "Data." + effect.Field.TypeName;
-            string fieldType = dataType?.GetNativeFieldType(effect.Field.FieldName)
-                ?? _nativeFieldTypes.GetType(
-                    effect.Field.TypeName,
-                    effect.Field.FieldName)
-                ?? (effect.Field.FieldName == "Size" ? "uint32" : "unknown");
-            _collector.RecordField(
-                label,
-                dataName,
-                effect.Field.FieldName,
-                fieldType,
-                effect.Usage);
-        }
-        foreach (GlobalAccessEffect effect in
-            _dataFlowResolver.GetGlobalAccessEffects(member))
-        {
-            _collector.RecordGlobal(
-                label,
-                effect.Name,
-                effect.Type,
-                effect.IsOptional);
+            switch (effect)
+            {
+                case FieldAccessEffect fieldAccess:
+                {
+                    string dataName = _index.TryGetType(fieldAccess.Field.Descriptor.Value, out DataTypeInfo dataType)
+                        ? DataName(dataType)
+                        : "Data." + fieldAccess.Field.Descriptor.Value;
+                    string fieldType = dataType?.GetNativeFieldType(fieldAccess.Field.FieldName)
+                        ?? _nativeFieldTypes.GetType(
+                            fieldAccess.Field.Descriptor.Value,
+                            fieldAccess.Field.FieldName)
+                        ?? (fieldAccess.Field.FieldName == "Size" ? "uint32" : "unknown");
+                    _collector.RecordField(
+                        label,
+                        dataName,
+                        fieldAccess.Field.FieldName,
+                        fieldType,
+                        fieldAccess.Usage);
+                    break;
+                }
+                case GlobalAccessEffect globalAccess:
+                    _collector.RecordGlobal(
+                        label,
+                        globalAccess.Name,
+                        globalAccess.Type,
+                        globalAccess.IsOptional);
+                    break;
+            }
         }
     }
 
@@ -195,14 +200,16 @@ internal sealed class UsageWalker
             return;
         }
 
-        foreach (GlobalAccessEffect effect in
-            _dataFlowResolver.GetGlobalAccessEffects(factory))
+        foreach (CdacEffect effect in _dataFlowResolver.GetEffects(factory))
         {
-            _collector.RecordGlobal(
-                label,
-                effect.Name,
-                effect.Type,
-                effect.IsOptional);
+            if (effect is GlobalAccessEffect globalAccess)
+            {
+                _collector.RecordGlobal(
+                    label,
+                    globalAccess.Name,
+                    globalAccess.Type,
+                    globalAccess.IsOptional);
+            }
         }
     }
 

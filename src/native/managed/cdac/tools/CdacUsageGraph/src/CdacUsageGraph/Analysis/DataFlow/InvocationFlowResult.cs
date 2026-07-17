@@ -4,7 +4,6 @@
 namespace CdacUsageGraph.Analysis.DataFlow;
 
 internal sealed record InvocationFlowResult(
-    ProvenanceValue ReturnValue,
-    IReadOnlyDictionary<int, ProvenanceValue> OutRefValues,
-    IReadOnlyCollection<FieldAccessEffect> Effects,
-    IReadOnlyCollection<GlobalAccessEffect> GlobalEffects);
+    DescriptorProvenanceValue ReturnValue,
+    IReadOnlyDictionary<int, DescriptorProvenanceValue> OutRefValues,
+    IReadOnlyCollection<CdacEffect> Effects);

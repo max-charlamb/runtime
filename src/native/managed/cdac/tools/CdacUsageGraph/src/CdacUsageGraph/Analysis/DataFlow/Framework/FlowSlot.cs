@@ -4,7 +4,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FlowAnalysis;
 
-namespace CdacUsageGraph.Analysis.DataFlow;
+namespace CdacUsageGraph.Analysis.DataFlow.Framework;
 
 internal readonly struct FlowSlot
 {

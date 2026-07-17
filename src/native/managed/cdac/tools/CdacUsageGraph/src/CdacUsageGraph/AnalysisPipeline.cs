@@ -59,7 +59,7 @@ internal sealed class AnalysisPipeline
                 $"Sanity check failed: discovered {index.Count} Data types and {registrations.Count} " +
                 "contract registrations. The cDAC compilation input is likely broken or has drifted.");
 
-        DataFlowTypeInfoResolver dataFlowResolver = new(workspace);
+        ProvenanceResolver dataFlowResolver = new(workspace);
         NativeDescriptorFieldTypeIndex nativeFieldTypes =
             NativeDescriptorFieldTypeIndex.Load(cdacRoot);
 

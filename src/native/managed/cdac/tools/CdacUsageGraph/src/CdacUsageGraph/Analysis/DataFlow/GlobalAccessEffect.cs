@@ -3,7 +3,7 @@
 
 namespace CdacUsageGraph.Analysis.DataFlow;
 
-internal readonly record struct GlobalAccessEffect(
+internal sealed record GlobalAccessEffect(
     string Name,
     string Type,
-    bool IsOptional);
+    bool IsOptional) : CdacEffect;

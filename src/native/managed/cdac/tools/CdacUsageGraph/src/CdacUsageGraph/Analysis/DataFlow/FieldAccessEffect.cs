@@ -5,4 +5,4 @@ using CdacUsageGraph.Model;
 
 namespace CdacUsageGraph.Analysis.DataFlow;
 
-internal readonly record struct FieldAccessEffect(FieldIdentity Field, UsageKind Usage);
+internal sealed record FieldAccessEffect(FieldIdentity Field, UsageKind Usage) : CdacEffect;
