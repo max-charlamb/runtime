@@ -21,6 +21,7 @@ internal sealed class AnalysisPipeline
     [
         new DataGraphMarkdownWriter(),
         new FieldUsageMarkdownWriter(),
+        new GlobalUsageMarkdownWriter(),
         new ContractsUsedMarkdownWriter(),
         new ReachableMethodsMarkdownWriter(),
         new JsonReportWriter(),

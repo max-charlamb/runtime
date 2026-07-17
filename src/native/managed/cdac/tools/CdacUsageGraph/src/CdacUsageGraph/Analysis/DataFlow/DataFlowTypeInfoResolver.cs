@@ -58,6 +58,16 @@ internal sealed class DataFlowTypeInfoResolver
         return GetResult(analysisMember)?.Effects ?? [];
     }
 
+    public IReadOnlyCollection<GlobalAccessEffect> GetGlobalAccessEffects(ISymbol member)
+    {
+        ISymbol analysisMember = member switch
+        {
+            IPropertySymbol property when property.GetMethod is not null => property.GetMethod,
+            _ => member,
+        };
+        return GetResult(analysisMember)?.GlobalEffects ?? [];
+    }
+
     private TypeInfoFlowResult? GetResult(IOperation expression)
     {
         if (!_workspace.TryGetSemanticModel(expression.Syntax.SyntaxTree, out SemanticModel model))
@@ -121,7 +131,8 @@ internal sealed class DataFlowTypeInfoResolver
                 TypeInfoDataFlowAnalysis analysis = new(
                     _apiSymbols,
                     ResolveOperationSource,
-                    ResolveInvocation);
+                    ResolveInvocation,
+                    ResolveObjectCreation);
                 try
                 {
                     return analysis.Analyze(
@@ -156,6 +167,7 @@ internal sealed class DataFlowTypeInfoResolver
             return new InvocationFlowResult(
                 ProvenanceValue.Bottom,
                 new Dictionary<int, ProvenanceValue>(),
+                [],
                 []);
         }
 
@@ -201,7 +213,40 @@ internal sealed class DataFlowTypeInfoResolver
                         result.ExitState[FlowSlot.ForSymbol(parameter)];
             }
         }
-        return new InvocationFlowResult(result.ReturnValue, outputs, result.Effects);
+        return new InvocationFlowResult(
+            result.ReturnValue,
+            outputs,
+            result.Effects,
+            result.GlobalEffects);
+    }
+
+    private InvocationFlowResult? ResolveObjectCreation(
+        IObjectCreationOperation creation,
+        IReadOnlyDictionary<int, ProvenanceValue> arguments)
+    {
+        if (creation.Constructor is not IMethodSymbol constructor ||
+            !_workspace.IsAnalyzable(constructor) ||
+            _activeMethods.Contains(constructor.OriginalDefinition))
+        {
+            return null;
+        }
+
+        Dictionary<IParameterSymbol, ProvenanceValue> parameterValues =
+            new(SymbolEqualityComparer.Default);
+        foreach (KeyValuePair<int, ProvenanceValue> argument in arguments)
+        {
+            if (argument.Key >= 0 && argument.Key < constructor.Parameters.Length)
+                parameterValues[constructor.Parameters[argument.Key]] = argument.Value;
+        }
+
+        TypeInfoFlowResult? result = AnalyzeMethod(constructor, parameterValues);
+        return result is null
+            ? null
+            : new InvocationFlowResult(
+                result.ReturnValue,
+                new Dictionary<int, ProvenanceValue>(),
+                result.Effects,
+                result.GlobalEffects);
     }
 
     private TypeInfoValue ResolveOperationSource(IOperation operation) =>

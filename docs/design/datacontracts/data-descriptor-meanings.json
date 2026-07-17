@@ -51,5 +51,16 @@
     "ThreadStore.ThreadCount": "Number of threads",
     "ThreadStore.UnstartedCount": "Number of unstarted threads",
     "TLSIndex.TLSIndexRawIndex": "Raw index value containing type and offset"
+  },
+  "_globals": {
+    "Thread": {
+      "FinalizerThread": "Pointer to the finalizer thread",
+      "GCThread": "Pointer to the GC thread",
+      "NumberOfTlsOffsetsNotUsedInNoncollectibleArray": "Number of unused slots in the non-collectible TLS array",
+      "PtrArrayOffsetToDataArray": "Offset from a pointer-array object to its enclosed data array",
+      "SizeOfGenericModeBlock": "Size of the GenericModeBlock structure",
+      "ThinlockThreadIdDispenser": "Pointer to the dispenser of thin-lock thread IDs",
+      "ThreadStore": "Pointer to the runtime thread store"
+    }
   }
 }

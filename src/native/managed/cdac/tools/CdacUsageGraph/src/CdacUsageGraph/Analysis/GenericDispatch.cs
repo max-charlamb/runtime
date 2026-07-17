@@ -125,6 +125,16 @@ internal static class GenericDispatch
                 }
             }
         }
+
+        foreach (IMethodSymbol candidate in implementationType.GetMembers()
+            .OfType<IMethodSymbol>())
+        {
+            if (candidate.ExplicitInterfaceImplementations.Any(implementation =>
+                HasCompatibleShape(implementation, interfaceMethod)))
+            {
+                return candidate;
+            }
+        }
         return null;
     }
 
@@ -156,6 +166,25 @@ internal static class GenericDispatch
             }
         }
         return method.IsAbstract ? null : method;
+    }
+
+    public static IMethodSymbol? FindDataFactory(INamedTypeSymbol dataType)
+    {
+        INamedTypeSymbol? dataInterface = dataType.AllInterfaces.FirstOrDefault(
+            @interface =>
+                @interface.OriginalDefinition.ContainingNamespace.ToDisplayString() +
+                    "." + @interface.OriginalDefinition.MetadataName ==
+                    CdacSymbols.IDataMetadataName &&
+                @interface.TypeArguments.Length == 1 &&
+                SymbolEqualityComparer.Default.Equals(
+                    @interface.TypeArguments[0],
+                    dataType));
+        IMethodSymbol? create = dataInterface?.GetMembers("Create")
+            .OfType<IMethodSymbol>()
+            .SingleOrDefault();
+        return create is null
+            ? null
+            : FindInterfaceImplementation(dataType, create);
     }
 
     private static bool HasCompatibleShape(

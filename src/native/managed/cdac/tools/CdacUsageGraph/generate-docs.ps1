@@ -8,9 +8,9 @@
 #   ./generate-docs.ps1 -Check   # fail (exit 1) if any doc would change (for CI/local verification)
 #
 # Marked regions look like:
-#   <!-- BEGIN GENERATED: data-descriptors contract=Thread version=c1 -->
-#   ...table...
-#   <!-- END GENERATED: data-descriptors contract=Thread version=c1 -->
+#   <!-- BEGIN GENERATED: usage contract=Thread version=c1 -->
+#   ...descriptor, global, and contract tables...
+#   <!-- END GENERATED: usage contract=Thread version=c1 -->
 [CmdletBinding()]
 param(
     [switch]$Check,

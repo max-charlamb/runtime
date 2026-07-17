@@ -5,6 +5,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
+using CdacUsageGraph.Analysis.DataFlow;
 
 namespace CdacUsageGraph.Discovery;
 
@@ -15,6 +16,7 @@ namespace CdacUsageGraph.Discovery;
 internal sealed class DataTypeInfo
 {
     private readonly Dictionary<IPropertySymbol, DataPropertyInfo> _properties;
+    private readonly Dictionary<string, DataPropertyInfo> _propertiesByNativeName;
 
     private DataTypeInfo(
         INamedTypeSymbol symbol,
@@ -24,6 +26,12 @@ internal sealed class DataTypeInfo
         Symbol = symbol;
         Names = names;
         _properties = properties;
+        _propertiesByNativeName = properties.Values
+            .GroupBy(property => property.NativeName, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.First(),
+                StringComparer.Ordinal);
     }
 
     public INamedTypeSymbol Symbol { get; }
@@ -44,6 +52,15 @@ internal sealed class DataTypeInfo
 
     public DataPropertyInfo GetProperty(IPropertySymbol property) =>
         _properties[(IPropertySymbol)property.OriginalDefinition];
+
+    public string? GetNativeFieldType(string nativeName) =>
+        nativeName == "Size"
+            ? "uint32"
+            : _propertiesByNativeName.TryGetValue(
+                nativeName,
+                out DataPropertyInfo? property)
+                ? property.NativeType
+                : null;
 
     public static DataTypeInfo Create(
         CSharpCompilation compilation,
@@ -92,25 +109,148 @@ internal sealed class DataTypeInfo
         SymbolEqualityComparer comparer)
     {
         IPropertySymbol definition = property.OriginalDefinition;
+        string nativeType = NativeFieldType(definition);
         if (TryGetNativeFieldName(definition, out string? nativeName))
-            return new DataPropertyInfo(definition, DataPropertyKind.DirectField, nativeName, []);
+            return new DataPropertyInfo(
+                definition,
+                DataPropertyKind.DirectField,
+                nativeName,
+                nativeType,
+                []);
 
         if (definition.GetAttributes().Any(
             a => a.AttributeClass?.ToDisplayString() == CdacSymbols.InstanceDataStartAttributeMetadataName))
-            return new DataPropertyInfo(definition, DataPropertyKind.TypeSize, "Size", []);
+            return new DataPropertyInfo(
+                definition,
+                DataPropertyKind.TypeSize,
+                "Size",
+                "uint32",
+                []);
 
         if (HasComputedGetter(definition))
-            return new DataPropertyInfo(definition, DataPropertyKind.Computed, property.Name, [definition]);
+            return new DataPropertyInfo(
+                definition,
+                DataPropertyKind.Computed,
+                property.Name,
+                nativeType,
+                [definition]);
 
         List<ISymbol> onInitMembers = OnInitMembersInitializing(compilation, definition, comparer);
         if (onInitMembers.Count > 0)
-            return new DataPropertyInfo(definition, DataPropertyKind.OnInitDerived, property.Name, onInitMembers);
+        {
+            return new DataPropertyInfo(
+                definition,
+                DataPropertyKind.OnInitDerived,
+                property.Name,
+                InferInitializerFieldType(
+                    compilation,
+                    property,
+                    onInitMembers) ?? nativeType,
+                onInitMembers);
+        }
 
         List<ISymbol> constructors = ConstructorsInitializing(compilation, definition, comparer);
         if (constructors.Count > 0)
-            return new DataPropertyInfo(definition, DataPropertyKind.ConstructorDerived, property.Name, constructors);
+            return new DataPropertyInfo(
+                definition,
+                DataPropertyKind.ConstructorDerived,
+                property.Name,
+                nativeType,
+                constructors);
 
-        return new DataPropertyInfo(definition, DataPropertyKind.DirectField, property.Name, []);
+        return new DataPropertyInfo(
+            definition,
+            DataPropertyKind.DirectField,
+            property.Name,
+            nativeType,
+            []);
+    }
+
+    private static string NativeFieldType(IPropertySymbol property)
+    {
+        AttributeData? attribute = property.GetAttributes().FirstOrDefault(
+            attribute => attribute.AttributeClass?.ToDisplayString() is
+                CdacSymbols.FieldAttributeMetadataName or
+                CdacSymbols.FieldAddressAttributeMetadataName or
+                CdacSymbols.RawOffsetAttributeMetadataName);
+        if (attribute?.AttributeClass?.ToDisplayString() ==
+            CdacSymbols.FieldAddressAttributeMetadataName)
+        {
+            return "pointer";
+        }
+        if (attribute is not null &&
+            attribute.NamedArguments.Any(argument =>
+                argument.Key == "Pointer" &&
+                argument.Value.Value is true))
+        {
+            return "pointer";
+        }
+        if (property.Type.SpecialType == SpecialType.System_Boolean &&
+            attribute is not null)
+        {
+            KeyValuePair<string, TypedConstant>? underlying =
+                attribute.NamedArguments.FirstOrDefault(argument =>
+                    argument.Key == "UnderlyingBoolType");
+            if (underlying?.Value.Value is ITypeSymbol underlyingType)
+                return NativeTypeName.FromType(underlyingType);
+        }
+        return NativeTypeName.FromType(property.Type);
+    }
+
+    private static string? InferInitializerFieldType(
+        CSharpCompilation compilation,
+        IPropertySymbol property,
+        IReadOnlyList<ISymbol> initializers)
+    {
+        foreach (ISymbol initializer in initializers)
+        {
+            foreach (SyntaxReference reference in initializer.DeclaringSyntaxReferences)
+            {
+                SemanticModel model = compilation.GetSemanticModel(reference.SyntaxTree);
+                if (model.GetOperation(reference.GetSyntax()) is not IOperation body)
+                    continue;
+                foreach (IInvocationOperation invocation in
+                    body.DescendantsAndSelf().OfType<IInvocationOperation>())
+                {
+                    if (!invocation.Arguments.Any(argument =>
+                        argument.Value.ConstantValue is
+                            { HasValue: true, Value: string fieldName } &&
+                        fieldName == property.Name))
+                    {
+                        continue;
+                    }
+
+                    switch (invocation.TargetMethod.Name)
+                    {
+                        case "ReadPointerField":
+                        case "ReadPointerFieldOrNull":
+                            return "pointer";
+                        case "ReadNUIntField":
+                            return "nuint";
+                        case "ReadNIntField":
+                            return "nint";
+                        case "ReadCodePointerField":
+                            return "CodePointer";
+                        case "ReadField":
+                        case "ReadFieldOrDefault":
+                            if (invocation.TargetMethod.TypeArguments.Length == 1)
+                            {
+                                return NativeTypeName.FromType(
+                                    invocation.TargetMethod.TypeArguments[0]);
+                            }
+                            break;
+                        case "ReadDataField":
+                            if (invocation.TargetMethod.TypeArguments.Length == 1)
+                            {
+                                return NativeTypeName.FromType(
+                                    invocation.TargetMethod.TypeArguments[0]);
+                            }
+                            break;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private static bool HasComputedGetter(IPropertySymbol property)

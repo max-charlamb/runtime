@@ -21,7 +21,13 @@ internal sealed class JsonReportWriter : IReportWriter
         string[] dataTypes,
         string[] contractsUsed,
         string[] reachableMethods,
+        Dictionary<string, GlobalUsageJson> globalsUsed,
+        Dictionary<string, Dictionary<string, string[]>> fieldTypes,
         Dictionary<string, Dictionary<string, string[]>> fieldUsage);
+
+    private sealed record GlobalUsageJson(
+        string[] types,
+        bool optional);
 
     public string Write(UsageGraph graph, string outputDirectory)
     {
@@ -45,6 +51,30 @@ internal sealed class JsonReportWriter : IReportWriter
                             .ToDictionary(
                                 x => x.Key,
                                 x => x.Value.Select(u => u.ToString()).OrderBy(s => s, StringComparer.Ordinal).ToArray()));
+                Dictionary<string, GlobalUsageJson> globals = graph.GlobalUsage
+                    .Where(entry => entry.Key.Label == label)
+                    .OrderBy(entry => entry.Key.Global, StringComparer.Ordinal)
+                    .ToDictionary(
+                        entry => entry.Key.Global,
+                        entry => new GlobalUsageJson(
+                            entry.Value.Types.OrderBy(
+                                type => type,
+                                StringComparer.Ordinal).ToArray(),
+                            entry.Value.IsOptional),
+                        StringComparer.Ordinal);
+                Dictionary<string, Dictionary<string, string[]>> types = fields
+                    .ToDictionary(
+                        dataType => dataType.Key,
+                        dataType => dataType.Value.Keys.ToDictionary(
+                            field => field,
+                            field => graph.FieldTypes.TryGetValue(
+                                (dataType.Key, field),
+                                out IReadOnlyCollection<string>? fieldTypes)
+                                    ? fieldTypes.OrderBy(
+                                        type => type,
+                                        StringComparer.Ordinal).ToArray()
+                                    : []),
+                        StringComparer.Ordinal);
                 return new ContractUsageJson(
                     g.Key.Contract,
                     g.Key.Version,
@@ -55,6 +85,8 @@ internal sealed class JsonReportWriter : IReportWriter
                     (methods ?? Array.Empty<string>()).OrderBy(
                         method => method,
                         StringComparer.Ordinal).ToArray(),
+                    globals,
+                    types,
                     fields);
             })
             .ToList();

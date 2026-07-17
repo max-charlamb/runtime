@@ -6,12 +6,13 @@ using System.Text.Json;
 namespace CdacUsageGraph.Docs;
 
 /// <summary>
-/// The per-contract "meaning" text for each <c>Type.Field</c> descriptor, plus optional
-/// <c>_supplement</c>/<c>_suppress</c> overrides, loaded from
+/// The per-contract "meaning" text for each <c>Type.Field</c> descriptor and global, plus
+/// optional <c>_supplement</c>/<c>_suppress</c> overrides, loaded from
 /// <c>docs/design/datacontracts/data-descriptor-meanings.json</c>. The file shape is:
 /// <code>
 /// {
 ///   "Thread": { "Thread.Id": "Thread identifier", ... },
+///   "_globals": { "Thread": { "ThreadStore": "Pointer to the thread store" } },
 ///   "_supplement": { "Thread": ["ExtraType.ExtraField"] },
 ///   "_suppress":   { "Thread": ["FalsePositiveType.Field"] }
 /// }
@@ -20,20 +21,24 @@ namespace CdacUsageGraph.Docs;
 internal sealed class DocDescriptorMeanings
 {
     private readonly Dictionary<string, Dictionary<string, string>> _meanings;
+    private readonly Dictionary<string, Dictionary<string, string>> _globalMeanings;
     private readonly Dictionary<string, List<string>> _supplement;
     private readonly Dictionary<string, List<string>> _suppress;
 
     private DocDescriptorMeanings(
         Dictionary<string, Dictionary<string, string>> meanings,
+        Dictionary<string, Dictionary<string, string>> globalMeanings,
         Dictionary<string, List<string>> supplement,
         Dictionary<string, List<string>> suppress)
     {
         _meanings = meanings;
+        _globalMeanings = globalMeanings;
         _supplement = supplement;
         _suppress = suppress;
     }
 
-    public static DocDescriptorMeanings Empty { get; } = new(new(), new(), new());
+    public static DocDescriptorMeanings Empty { get; } =
+        new(new(), new(), new(), new());
 
     /// <summary>Loads the sidecar; returns <see cref="Empty"/> when the file does not exist.</summary>
     public static DocDescriptorMeanings Load(string path)
@@ -42,6 +47,8 @@ internal sealed class DocDescriptorMeanings
             return Empty;
 
         Dictionary<string, Dictionary<string, string>> meanings = new(StringComparer.Ordinal);
+        Dictionary<string, Dictionary<string, string>> globalMeanings =
+            new(StringComparer.Ordinal);
         Dictionary<string, List<string>> supplement = new(StringComparer.Ordinal);
         Dictionary<string, List<string>> suppress = new(StringComparer.Ordinal);
 
@@ -52,6 +59,9 @@ internal sealed class DocDescriptorMeanings
             {
                 case "_supplement":
                     ReadListMap(top.Value, supplement);
+                    break;
+                case "_globals":
+                    ReadStringMap(top.Value, globalMeanings);
                     break;
                 case "_suppress":
                     ReadListMap(top.Value, suppress);
@@ -68,13 +78,25 @@ internal sealed class DocDescriptorMeanings
             }
         }
 
-        return new DocDescriptorMeanings(meanings, supplement, suppress);
+        return new DocDescriptorMeanings(
+            meanings,
+            globalMeanings,
+            supplement,
+            suppress);
     }
 
     /// <summary>The meaning for <paramref name="key"/> (<c>Type.Field</c>), or a TODO placeholder.</summary>
     public string Meaning(string contractShort, string key) =>
         _meanings.TryGetValue(contractShort, out Dictionary<string, string>? byKey) && byKey.TryGetValue(key, out string? m)
             ? m
+            : "_TODO: describe_";
+
+    public string GlobalMeaning(string contractShort, string global) =>
+        _globalMeanings.TryGetValue(
+            contractShort,
+            out Dictionary<string, string>? byGlobal) &&
+        byGlobal.TryGetValue(global, out string? meaning)
+            ? meaning
             : "_TODO: describe_";
 
     public IReadOnlyList<string> Supplement(string contractShort) =>
@@ -97,6 +119,19 @@ internal sealed class DocDescriptorMeanings
                 }
             }
             into[p.Name] = list;
+        }
+    }
+
+    private static void ReadStringMap(
+        JsonElement obj,
+        Dictionary<string, Dictionary<string, string>> into)
+    {
+        foreach (JsonProperty contract in obj.EnumerateObject())
+        {
+            Dictionary<string, string> values = new(StringComparer.Ordinal);
+            foreach (JsonProperty entry in contract.Value.EnumerateObject())
+                values[entry.Name] = entry.Value.GetString() ?? string.Empty;
+            into[contract.Name] = values;
         }
     }
 

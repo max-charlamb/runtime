@@ -25,6 +25,12 @@ internal sealed class CdacApiSymbols
         ApiProperty typeInfoSize,
         ApiProperty fieldInfoOffset,
         ApiMethod? dataCacheGetOrAdd,
+        ApiMethod targetReadGlobal,
+        ApiMethod targetTryReadGlobal,
+        ApiMethod targetReadGlobalPointer,
+        ApiMethod targetTryReadGlobalPointer,
+        ApiMethod targetReadGlobalString,
+        ApiMethod targetTryReadGlobalString,
         ApiMethod targetReadMethods,
         ApiMethod targetWriteMethods)
     {
@@ -38,6 +44,12 @@ internal sealed class CdacApiSymbols
         TypeInfoSize = typeInfoSize;
         FieldInfoOffset = fieldInfoOffset;
         DataCacheGetOrAdd = dataCacheGetOrAdd;
+        TargetReadGlobal = targetReadGlobal;
+        TargetTryReadGlobal = targetTryReadGlobal;
+        TargetReadGlobalPointer = targetReadGlobalPointer;
+        TargetTryReadGlobalPointer = targetTryReadGlobalPointer;
+        TargetReadGlobalString = targetReadGlobalString;
+        TargetTryReadGlobalString = targetTryReadGlobalString;
         TargetReadMethods = targetReadMethods;
         TargetWriteMethods = targetWriteMethods;
     }
@@ -52,6 +64,12 @@ internal sealed class CdacApiSymbols
     public ApiProperty TypeInfoSize { get; }
     public ApiProperty FieldInfoOffset { get; }
     public ApiMethod? DataCacheGetOrAdd { get; }
+    public ApiMethod TargetReadGlobal { get; }
+    public ApiMethod TargetTryReadGlobal { get; }
+    public ApiMethod TargetReadGlobalPointer { get; }
+    public ApiMethod TargetTryReadGlobalPointer { get; }
+    public ApiMethod TargetReadGlobalString { get; }
+    public ApiMethod TargetTryReadGlobalString { get; }
     public ApiMethod TargetReadMethods { get; }
     public ApiMethod TargetWriteMethods { get; }
 
@@ -122,6 +140,53 @@ internal sealed class CdacApiSymbols
                     dataCaches,
                     "GetOrAdd",
                     method => method.Parameters.Length == 1),
+            CreateMethod(
+                targets,
+                CdacSymbols.ReadGlobalMethodName,
+                method => method.TypeParameters.Length == 1 &&
+                    method.Parameters is
+                    [
+                        { Type.SpecialType: SpecialType.System_String },
+                    ]),
+            CreateMethod(
+                targets,
+                CdacSymbols.TryReadGlobalMethodName,
+                method => method.TypeParameters.Length == 1 &&
+                    method.Parameters is
+                    [
+                        { Type.SpecialType: SpecialType.System_String },
+                        { RefKind: RefKind.Out },
+                    ]),
+            CreateMethod(
+                targets,
+                CdacSymbols.ReadGlobalPointerMethodName,
+                method => method.Parameters is
+                [
+                    { Type.SpecialType: SpecialType.System_String },
+                ]),
+            CreateMethod(
+                targets,
+                CdacSymbols.TryReadGlobalPointerMethodName,
+                method => method.Parameters is
+                [
+                    { Type.SpecialType: SpecialType.System_String },
+                    { RefKind: RefKind.Out },
+                ]),
+            CreateMethod(
+                targets,
+                CdacSymbols.ReadGlobalStringMethodName,
+                method => method.Parameters is
+                [
+                    { Type.SpecialType: SpecialType.System_String },
+                ]),
+            CreateMethod(
+                targets,
+                CdacSymbols.TryReadGlobalStringMethodName,
+                method => method.Parameters is
+                [
+                    { Type.SpecialType: SpecialType.System_String },
+                    { RefKind: RefKind.Out },
+                ]),
             CreateMethods(
                 targets,
                 [

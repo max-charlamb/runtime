@@ -10,6 +10,7 @@ using CdacUsageGraph.Model;
 using CdacUsageGraph.Reporting;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Operations;
 using Xunit;
 
 namespace CdacUsageGraph.Tests;
@@ -92,6 +93,34 @@ public sealed class UsageWalkerIntegrationTests
             abstractions.GetSpecialType(SpecialType.System_String)));
     }
 
+    [Fact]
+    public void ResolvesGlobalsThroughCustomDataFactory()
+    {
+        DirectoryInfo? root = Locator.FindCdacRoot();
+        if (root is null) return; // cDAC source not found (running outside the repo)
+
+        CdacAnalysisWorkspace workspace = CdacWorkspaceLoader.Load(root.FullName);
+        INamedTypeSymbol dataType = workspace.Contracts.Assembly.GlobalNamespace
+            .EnumerateNamedTypes()
+            .Single(type => type.Name == "DacStreams_1_Data");
+        IMethodSymbol implementation = Assert.IsAssignableFrom<IMethodSymbol>(
+            GenericDispatch.FindDataFactory(dataType));
+        DataFlowTypeInfoResolver resolver = new(workspace);
+
+        Assert.Contains(
+            new GlobalAccessEffect(
+                "MiniMetaDataBuffAddress",
+                "pointer",
+                IsOptional: false),
+            resolver.GetGlobalAccessEffects(implementation));
+        Assert.Contains(
+            new GlobalAccessEffect(
+                "MiniMetaDataBuffMaxSize",
+                "pointer",
+                IsOptional: false),
+            resolver.GetGlobalAccessEffects(implementation));
+    }
+
     [Theory]
     [InlineData("ReadPointerField", "Read")]
     [InlineData("ReadDataField", "Read")]
@@ -170,6 +199,29 @@ public sealed class UsageWalkerIntegrationTests
         // ... and depends on the Object contract (not on Object's descriptors directly).
         Assert.True(graph.ContractsUsed.TryGetValue(new ContractLabel("IThread", "c1"), out IReadOnlyCollection<string>? threadContracts));
         Assert.Contains("Object", threadContracts!);
+    }
+
+    [Theory]
+    [InlineData("IThread", "c1", "ThreadStore", "pointer", false)]
+    [InlineData("IRuntimeInfo", "c1", "Architecture", "string", true)]
+    [InlineData("IRuntimeInfo", "c1", "RecommendedReaderVersion", "uint32", true)]
+    [InlineData("IStackWalk", "c1", "<FrameType>Identifier", "pointer", true)]
+    [InlineData("IDacStreams", "c1", "MiniMetaDataBuffAddress", "pointer", false)]
+    [InlineData("IDacStreams", "c1", "MiniMetaDataBuffMaxSize", "pointer", false)]
+    public void RecordsGlobalUsage(
+        string contract,
+        string version,
+        string global,
+        string type,
+        bool optional)
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+
+        GlobalUsageInfo usage = built.Value.Graph.GlobalUsage[
+            (new ContractLabel(contract, version), global)];
+        Assert.Contains(type, usage.Types);
+        Assert.Equal(optional, usage.IsOptional);
     }
 
     [Fact]
@@ -309,6 +361,9 @@ public sealed class UsageWalkerIntegrationTests
             out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? threadFields));
         Assert.Contains("ThreadHandle", threadFields!.Keys);
         Assert.Contains("RuntimeThreadLocals", threadFields!.Keys);
+        Assert.Equal(
+            ["pointer"],
+            graph.FieldTypes[("Data.Thread", "RuntimeThreadLocals")]);
 
         // ObjectHandle.Handle/Object are parsed from raw target pointers, not named descriptor
         // fields, so reading the convenience properties must not invent descriptor rows.
@@ -440,6 +495,14 @@ public sealed class UsageWalkerIntegrationTests
             Assert.True(gcInfo.GetProperty("impls").GetArrayLength() > 1);
             Assert.True(gcInfo.GetProperty("reachableMethods").GetArrayLength() > 0);
             Assert.False(gcInfo.TryGetProperty("impl", out _));
+
+            JsonElement runtimeInfo = document.RootElement.EnumerateArray().Single(e =>
+                e.GetProperty("contract").GetString() == "IRuntimeInfo" &&
+                e.GetProperty("version").GetString() == "c1");
+            JsonElement architecture =
+                runtimeInfo.GetProperty("globalsUsed").GetProperty("Architecture");
+            Assert.Equal("string", architecture.GetProperty("types")[0].GetString());
+            Assert.True(architecture.GetProperty("optional").GetBoolean());
         }
         finally
         {

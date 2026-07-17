@@ -15,6 +15,8 @@ namespace CdacUsageGraph.Analysis;
 internal sealed class UsageCollector
 {
     private readonly Dictionary<(ContractLabel, string), Dictionary<string, HashSet<UsageKind>>> _fieldUsage = new();
+    private readonly Dictionary<(string DataType, string Field), HashSet<string>> _fieldTypes = new();
+    private readonly Dictionary<(ContractLabel, string), GlobalUsageBuilder> _globalUsage = new();
     private readonly Dictionary<ContractLabel, HashSet<string>> _contractsUsed = new();
     private readonly Dictionary<ContractLabel, HashSet<string>> _reachableMethods = new();
 
@@ -22,12 +24,21 @@ internal sealed class UsageCollector
     public void RecordType(ContractLabel label, string dataName) => GetOrAddType(label, dataName);
 
     /// <summary>Records a specific field usage (and implicitly the type usage).</summary>
-    public void RecordField(ContractLabel label, string dataName, string field, UsageKind kind)
+    public void RecordField(
+        ContractLabel label,
+        string dataName,
+        string field,
+        string type,
+        UsageKind kind)
     {
         Dictionary<string, HashSet<UsageKind>> fields = GetOrAddType(label, dataName);
         if (!fields.TryGetValue(field, out HashSet<UsageKind>? kinds))
             fields[field] = kinds = new HashSet<UsageKind>();
         kinds.Add(kind);
+        (string, string) typeKey = (dataName, field);
+        if (!_fieldTypes.TryGetValue(typeKey, out HashSet<string>? types))
+            _fieldTypes[typeKey] = types = new HashSet<string>(StringComparer.Ordinal);
+        types.Add(type);
     }
 
     public void RecordContractUsed(ContractLabel label, string contractName)
@@ -35,6 +46,19 @@ internal sealed class UsageCollector
         if (!_contractsUsed.TryGetValue(label, out HashSet<string>? set))
             _contractsUsed[label] = set = new HashSet<string>(StringComparer.Ordinal);
         set.Add(contractName);
+    }
+
+    public void RecordGlobal(
+        ContractLabel label,
+        string name,
+        string type,
+        bool isOptional)
+    {
+        (ContractLabel, string) key = (label, name);
+        if (!_globalUsage.TryGetValue(key, out GlobalUsageBuilder? usage))
+            _globalUsage[key] = usage = new GlobalUsageBuilder();
+        usage.Types.Add(type);
+        usage.IsOptional &= isOptional;
     }
 
     public void RecordReachableMethod(ContractLabel label, string method)
@@ -58,11 +82,31 @@ internal sealed class UsageCollector
             kv => kv.Key,
             kv => (IReadOnlyCollection<string>)kv.Value);
 
+    public IReadOnlyDictionary<
+        (string DataType, string Field),
+        IReadOnlyCollection<string>> FieldTypes =>
+        _fieldTypes.ToDictionary(
+            entry => entry.Key,
+            entry => (IReadOnlyCollection<string>)entry.Value);
+
+    public IReadOnlyDictionary<(ContractLabel Label, string Global), GlobalUsageInfo> GlobalUsage =>
+        _globalUsage.ToDictionary(
+            entry => (entry.Key.Item1, entry.Key.Item2),
+            entry => new GlobalUsageInfo(
+                entry.Value.Types.ToArray(),
+                entry.Value.IsOptional));
+
     private Dictionary<string, HashSet<UsageKind>> GetOrAddType(ContractLabel label, string dataName)
     {
         (ContractLabel, string) key = (label, dataName);
         if (!_fieldUsage.TryGetValue(key, out Dictionary<string, HashSet<UsageKind>>? fields))
             _fieldUsage[key] = fields = new Dictionary<string, HashSet<UsageKind>>(StringComparer.Ordinal);
         return fields;
+    }
+
+    private sealed class GlobalUsageBuilder
+    {
+        public HashSet<string> Types { get; } = new(StringComparer.Ordinal);
+        public bool IsOptional { get; set; } = true;
     }
 }

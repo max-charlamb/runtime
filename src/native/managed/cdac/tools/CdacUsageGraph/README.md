@@ -52,6 +52,10 @@ which of their `[Field]` descriptor fields the contract implementation uses.
    - `nameof(Data.X.Field)` and raw-string `TypeInfo.Fields["nativeName"]` offset
      lookups (`OffsetLookup`), and
    - `TypeInfo.Size` reads, recorded as a synthetic `Size` field.
+   Global reads through `ReadGlobal*` / `TryReadGlobal*` are collected with their
+   resolved name, native type, and required/optional access. Constant names propagate
+   through helper parameters and switch expressions; enum-derived name families are
+   represented symbolically (for example, `<FrameType>Identifier`).
    `Target.TypeInfo` identities are propagated by a Roslyn ControlFlowGraph analysis
    through assignments, branch joins, loops, method returns, `out`/`ref` parameters,
    method/constructor arguments, fields, and interface-to-implementation parameters,
@@ -118,6 +122,7 @@ test project references it via `<ProjectReference>` + `InternalsVisibleTo`.
 |------|----------|
 | `contract-data-graph.md`      | `(contract, version) -> Data types` table |
 | `contract-field-usage.md`     | `(contract, version, Data.Type, field) -> usage kind` rows |
+| `contract-global-usage.md`    | `(contract, version, global) -> native type and required/optional access` |
 | `contract-contracts-used.md`  | `(contract, version) -> other contracts used` (`_target.Contracts.<X>`) |
 | `contract-methods-reachable.md` | `(contract, version) -> reachable specialized method contexts` |
 | `contract-usage.json`         | Machine-readable graph |
@@ -154,6 +159,11 @@ blocks from the analysis, merging in `data-descriptor-meanings.json`:
 pwsh ./generate-docs.ps1           # rewrite marked blocks in place
 pwsh ./generate-docs.ps1 -Check    # fail on drift (same logic as the CI unit test)
 ```
+
+`usage` is the only supported marker kind. Each block contains alphabetized tables for data
+descriptors, globals, and contracts used. Descriptor rows are sorted by descriptor name and then
+field name; the sidecar supplies human-authored meanings while names and native types come from
+the analysis.
 
 The documentation generation logic lives in `Docs/DocGenerator.cs` so the CI unit test and the
 regen use one implementation. `MSBuildWorkspace` evaluates the real Contracts project, including

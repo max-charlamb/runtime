@@ -40,6 +40,12 @@ public sealed class DataTypeIndexTests
 
                 public abstract TypeInfo GetTypeInfo(string name);
                 public abstract bool TryGetTypeInfo(string name, out TypeInfo type);
+                public abstract ulong ReadGlobalPointer(string name);
+                public abstract bool TryReadGlobalPointer(string name, out ulong? value);
+                public abstract string ReadGlobalString(string name);
+                public abstract bool TryReadGlobalString(string name, out string? value);
+                public abstract T ReadGlobal<T>(string name) where T : struct;
+                public abstract bool TryReadGlobal<T>(string name, out T? value) where T : struct;
                 public abstract T Read<T>(ulong address);
                 public abstract void Write<T>(ulong address, T value);
             }
@@ -464,6 +470,205 @@ public sealed class DataTypeIndexTests
                 new FieldIdentity("Widget", "Try"),
                 UsageKind.Read),
             result.Effects);
+    }
+
+    [Fact]
+    public void DataFlowRecordsGlobalApiEffects()
+    {
+        const string source = """
+            namespace Example
+            {
+                public sealed class User
+                {
+                    public void Read(Target target)
+                    {
+                        _ = target.ReadGlobalPointer("RequiredPointer");
+                        _ = target.TryReadGlobalPointer("OptionalPointer", out _);
+                        _ = target.ReadGlobalString("RequiredString");
+                        _ = target.TryReadGlobalString("OptionalString", out _);
+                        _ = target.ReadGlobal<uint>("RequiredCount");
+                        _ = target.TryReadGlobal<int>("OptionalCount", out _);
+                    }
+                }
+            }
+            """;
+        (TypeInfoFlowResult result, _, _) =
+            AnalyzeTypeInfoFlow(source, "Example.User", "Read");
+
+        Assert.Contains(
+            new GlobalAccessEffect("RequiredPointer", "pointer", IsOptional: false),
+            result.GlobalEffects);
+        Assert.Contains(
+            new GlobalAccessEffect("OptionalPointer", "pointer", IsOptional: true),
+            result.GlobalEffects);
+        Assert.Contains(
+            new GlobalAccessEffect("RequiredString", "string", IsOptional: false),
+            result.GlobalEffects);
+        Assert.Contains(
+            new GlobalAccessEffect("OptionalString", "string", IsOptional: true),
+            result.GlobalEffects);
+        Assert.Contains(
+            new GlobalAccessEffect("RequiredCount", "uint32", IsOptional: false),
+            result.GlobalEffects);
+        Assert.Contains(
+            new GlobalAccessEffect("OptionalCount", "int32", IsOptional: true),
+            result.GlobalEffects);
+    }
+
+    [Fact]
+    public void DataFlowPropagatesHelperGlobalNames()
+    {
+        const string source = """
+            namespace Example
+            {
+                public sealed class User
+                {
+                    private static ulong ReadGlobal(Target target, string name)
+                        => target.ReadGlobalPointer(name);
+
+                    public ulong Read(Target target)
+                        => ReadGlobal(target, "ForwardedGlobal");
+                }
+            }
+            """;
+        CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
+        DataFlowTypeInfoResolver resolver = new(
+            new CdacAnalysisWorkspace(compilation, [compilation]));
+        IMethodSymbol read = compilation.GetTypeByMetadataName("Example.User")!
+            .GetMembers("Read")
+            .OfType<IMethodSymbol>()
+            .Single(method => method.Parameters.Length == 1);
+
+        Assert.Contains(
+            new GlobalAccessEffect(
+                "ForwardedGlobal",
+                "pointer",
+                IsOptional: false),
+            resolver.GetGlobalAccessEffects(read));
+    }
+
+    [Fact]
+    public void DataFlowUnionsSwitchExpressionGlobalNames()
+    {
+        const string source = """
+            namespace Example
+            {
+                public enum Kind { First, Second }
+
+                public sealed class User
+                {
+                    public ulong Read(Target target, Kind kind)
+                    {
+                        string name = kind switch
+                        {
+                            Kind.First => "FirstGlobal",
+                            Kind.Second => "SecondGlobal",
+                            _ => throw new System.ArgumentOutOfRangeException(nameof(kind)),
+                        };
+                        return target.ReadGlobalPointer(name);
+                    }
+                }
+            }
+            """;
+        (TypeInfoFlowResult result, _, _) =
+            AnalyzeTypeInfoFlow(source, "Example.User", "Read");
+
+        Assert.Contains(
+            new GlobalAccessEffect("FirstGlobal", "pointer", IsOptional: false),
+            result.GlobalEffects);
+        Assert.Contains(
+            new GlobalAccessEffect("SecondGlobal", "pointer", IsOptional: false),
+            result.GlobalEffects);
+    }
+
+    [Fact]
+    public void DataFlowRecordsSymbolicEnumGlobalNames()
+    {
+        const string source = """
+            namespace Example
+            {
+                public enum FrameType { First, Second }
+
+                public sealed class User
+                {
+                    public bool Read(Target target, FrameType frameType)
+                        => target.TryReadGlobalPointer(
+                            frameType.ToString() + "Identifier",
+                            out _);
+                }
+            }
+            """;
+        (TypeInfoFlowResult result, _, _) =
+            AnalyzeTypeInfoFlow(source, "Example.User", "Read");
+
+        Assert.Contains(
+            new GlobalAccessEffect(
+                "<FrameType>Identifier",
+                "pointer",
+                IsOptional: true),
+            result.GlobalEffects);
+    }
+
+    [Fact]
+    public void DataFlowPreservesKnownPartsOfUnknownGlobalNames()
+    {
+        const string source = """
+            namespace Example
+            {
+                public sealed class User
+                {
+                    public ulong Read(Target target, string prefix)
+                        => target.ReadGlobalPointer(prefix + "Identifier");
+                }
+            }
+            """;
+        (TypeInfoFlowResult result, _, _) =
+            AnalyzeTypeInfoFlow(source, "Example.User", "Read");
+
+        Assert.Contains(
+            new GlobalAccessEffect(
+                "<prefix>Identifier",
+                "pointer",
+                IsOptional: false),
+            result.GlobalEffects);
+    }
+
+    [Fact]
+    public void UsageGraphMergesGlobalAccessRequirements()
+    {
+        const string source = """
+            namespace Microsoft.Diagnostics.DataContractReader.Data
+            {
+                public interface IData<T> { }
+            }
+
+            namespace Example
+            {
+                public sealed class TestContract
+                {
+                    public void Read(Target target)
+                    {
+                        _ = target.TryReadGlobalPointer("SharedGlobal", out _);
+                        _ = target.ReadGlobalPointer("SharedGlobal");
+                    }
+                }
+            }
+            """;
+        CSharpCompilation compilation = CreateTypeInfoFlowCompilation(source);
+        CdacAnalysisWorkspace workspace = new(compilation, [compilation]);
+        INamedTypeSymbol implementation = compilation.GetTypeByMetadataName(
+            "Example.TestContract")!;
+        UsageGraph graph = new UsageWalker(
+            compilation,
+            DataTypeIndex.Build(compilation),
+            new DataFlowTypeInfoResolver(workspace)).Walk(
+                [new ContractRegistration("ITest", "c1", implementation)],
+                "");
+        GlobalUsageInfo usage = graph.GlobalUsage[
+            (new ContractLabel("ITest", "c1"), "SharedGlobal")];
+
+        Assert.Equal(["pointer"], usage.Types);
+        Assert.False(usage.IsOptional);
     }
 
     [Fact]

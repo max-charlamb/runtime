@@ -22,4 +22,5 @@ internal sealed record DataPropertyInfo(
     IPropertySymbol Symbol,
     DataPropertyKind Kind,
     string NativeName,
+    string NativeType,
     IReadOnlyList<ISymbol> ExpansionMembers);

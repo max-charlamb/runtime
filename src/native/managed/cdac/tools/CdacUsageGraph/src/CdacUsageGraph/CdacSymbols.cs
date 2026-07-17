@@ -51,5 +51,11 @@ internal static class CdacSymbols
     public const string TypeInfoTypeName = "TypeInfo";
     public const string GetTypeInfoMethodName = "GetTypeInfo";
     public const string TryGetTypeInfoMethodName = "TryGetTypeInfo";
+    public const string ReadGlobalMethodName = "ReadGlobal";
+    public const string TryReadGlobalMethodName = "TryReadGlobal";
+    public const string ReadGlobalPointerMethodName = "ReadGlobalPointer";
+    public const string TryReadGlobalPointerMethodName = "TryReadGlobalPointer";
+    public const string ReadGlobalStringMethodName = "ReadGlobalString";
+    public const string TryReadGlobalStringMethodName = "TryReadGlobalString";
     public const string ToNameMethodName = "ToName";
 }

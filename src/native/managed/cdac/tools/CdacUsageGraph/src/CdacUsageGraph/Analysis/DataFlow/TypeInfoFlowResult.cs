@@ -12,11 +12,13 @@ internal sealed class TypeInfoFlowResult
     public TypeInfoFlowResult(
         IReadOnlyDictionary<OperationKey, ProvenanceValue> values,
         IReadOnlyCollection<FieldAccessEffect> effects,
+        IReadOnlyCollection<GlobalAccessEffect> globalEffects,
         ProvenanceValue returnValue,
         TypeInfoFlowState exitState)
     {
         _values = values;
         Effects = effects;
+        GlobalEffects = globalEffects;
         ReturnValue = returnValue;
         ExitState = exitState;
     }
@@ -30,6 +32,8 @@ internal sealed class TypeInfoFlowResult
             : ProvenanceValue.Bottom;
 
     public IReadOnlyCollection<FieldAccessEffect> Effects { get; }
+
+    public IReadOnlyCollection<GlobalAccessEffect> GlobalEffects { get; }
 
     public ProvenanceValue ReturnValue { get; }
 

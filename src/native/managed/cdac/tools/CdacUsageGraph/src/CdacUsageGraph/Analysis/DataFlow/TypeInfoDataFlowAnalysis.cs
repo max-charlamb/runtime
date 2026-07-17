@@ -22,8 +22,13 @@ internal sealed class TypeInfoDataFlowAnalysis
         IInvocationOperation,
         IReadOnlyDictionary<int, ProvenanceValue>,
         InvocationFlowResult?>? _invocationResolver;
+    private readonly Func<
+        IObjectCreationOperation,
+        IReadOnlyDictionary<int, ProvenanceValue>,
+        InvocationFlowResult?>? _objectCreationResolver;
     private readonly Dictionary<OperationKey, ProvenanceValue> _values = new();
     private readonly HashSet<FieldAccessEffect> _effects = [];
+    private readonly HashSet<GlobalAccessEffect> _globalEffects = [];
     private ProvenanceValue _returnValue = ProvenanceValue.Bottom;
 
     public TypeInfoDataFlowAnalysis(
@@ -32,11 +37,16 @@ internal sealed class TypeInfoDataFlowAnalysis
         Func<
             IInvocationOperation,
             IReadOnlyDictionary<int, ProvenanceValue>,
-            InvocationFlowResult?>? invocationResolver = null)
+            InvocationFlowResult?>? invocationResolver = null,
+        Func<
+            IObjectCreationOperation,
+            IReadOnlyDictionary<int, ProvenanceValue>,
+            InvocationFlowResult?>? objectCreationResolver = null)
     {
         _apiSymbols = apiSymbols;
         _fallback = fallback;
         _invocationResolver = invocationResolver;
+        _objectCreationResolver = objectCreationResolver;
     }
 
     public TypeInfoFlowResult Analyze(
@@ -72,6 +82,7 @@ internal sealed class TypeInfoDataFlowAnalysis
     {
         _values.Clear();
         _effects.Clear();
+        _globalEffects.Clear();
         _returnValue = ProvenanceValue.Bottom;
         TypeInfoFlowState?[] inputs = new TypeInfoFlowState?[graph.Blocks.Length];
         TypeInfoFlowState?[] outputs = new TypeInfoFlowState?[graph.Blocks.Length];
@@ -112,6 +123,7 @@ internal sealed class TypeInfoDataFlowAnalysis
         return new TypeInfoFlowResult(
             new Dictionary<OperationKey, ProvenanceValue>(_values),
             _effects.ToArray(),
+            _globalEffects.ToArray(),
             _returnValue,
             exitState);
 
@@ -163,9 +175,12 @@ internal sealed class TypeInfoDataFlowAnalysis
                 FlowSlot.ForSymbol(declarator.Symbol),
                 Evaluate(declarator.Initializer.Value, state),
                 state),
+            ISwitchExpressionOperation switchExpression =>
+                EvaluateSwitchExpression(switchExpression, state),
             IPropertyReferenceOperation property => EvaluateProperty(property, state),
             IBinaryOperation binary => EvaluateBinary(binary, state),
             IInvocationOperation invocation => EvaluateInvocation(invocation, state),
+            IObjectCreationOperation creation => EvaluateObjectCreation(creation, state),
             _ => EvaluateChildren(operation, state),
         };
 
@@ -206,6 +221,9 @@ internal sealed class TypeInfoDataFlowAnalysis
             return ProvenanceValue.Bottom;
         }
 
+        if (TryRecordGlobalAccess(invocation, state))
+            return ProvenanceValue.Bottom;
+
         if (_apiSymbols.DataTypeToName?.Matches(invocation.TargetMethod) == true)
         {
             if (invocation.TargetMethod.ReducedFrom is not null && invocation.Instance is not null)
@@ -216,6 +234,14 @@ internal sealed class TypeInfoDataFlowAnalysis
             return valueArgument is null
                 ? ProvenanceValue.FromString(StringValue.Unknown)
                 : ProvenanceValue.FromString(Evaluate(valueArgument.Value, state).Strings);
+        }
+
+        if (invocation.TargetMethod.Name == nameof(ToString) &&
+            invocation.Arguments.Length == 0 &&
+            invocation.Instance?.Type?.TypeKind == TypeKind.Enum)
+        {
+            return ProvenanceValue.FromString(
+                Evaluate(invocation.Instance, state).Strings);
         }
 
         if (_apiSymbols.TargetGetTypeInfo.Matches(invocation.TargetMethod) ||
@@ -250,6 +276,7 @@ internal sealed class TypeInfoDataFlowAnalysis
         if (invocationResult is not null)
         {
             _effects.UnionWith(invocationResult.Effects);
+            _globalEffects.UnionWith(invocationResult.GlobalEffects);
             foreach (KeyValuePair<int, ProvenanceValue> output in invocationResult.OutRefValues)
             {
                 IArgumentOperation? argument = invocation.Arguments.FirstOrDefault(
@@ -273,6 +300,139 @@ internal sealed class TypeInfoDataFlowAnalysis
                 RecordAddressEffects(address, UsageKind.Write);
         }
         return ProvenanceValue.Bottom;
+    }
+
+    private ProvenanceValue EvaluateObjectCreation(
+        IObjectCreationOperation creation,
+        TypeInfoFlowState state)
+    {
+        Dictionary<int, ProvenanceValue> arguments = creation.Arguments.ToDictionary(
+            argument => argument.Parameter?.Ordinal ?? -1,
+            argument => Evaluate(argument.Value, state));
+        InvocationFlowResult? result = _objectCreationResolver?.Invoke(
+            creation,
+            arguments);
+        if (result is null)
+            return ProvenanceValue.Bottom;
+
+        _effects.UnionWith(result.Effects);
+        _globalEffects.UnionWith(result.GlobalEffects);
+        return result.ReturnValue;
+    }
+
+    private bool TryRecordGlobalAccess(
+        IInvocationOperation invocation,
+        TypeInfoFlowState state)
+    {
+        string? type = null;
+        bool isOptional = false;
+        if (_apiSymbols.TargetReadGlobalPointer.Matches(invocation.TargetMethod))
+        {
+            type = "pointer";
+        }
+        else if (_apiSymbols.TargetTryReadGlobalPointer.Matches(invocation.TargetMethod))
+        {
+            type = "pointer";
+            isOptional = true;
+        }
+        else if (_apiSymbols.TargetReadGlobalString.Matches(invocation.TargetMethod))
+        {
+            type = "string";
+        }
+        else if (_apiSymbols.TargetTryReadGlobalString.Matches(invocation.TargetMethod))
+        {
+            type = "string";
+            isOptional = true;
+        }
+        else if (_apiSymbols.TargetReadGlobal.Matches(invocation.TargetMethod))
+        {
+            type = NativeTypeName.FromType(invocation.TargetMethod.TypeArguments[0]);
+        }
+        else if (_apiSymbols.TargetTryReadGlobal.Matches(invocation.TargetMethod))
+        {
+            type = NativeTypeName.FromType(invocation.TargetMethod.TypeArguments[0]);
+            isOptional = true;
+        }
+
+        if (type is null)
+            return false;
+
+        StringValue names = EvaluateArgument(invocation, 0, state).Strings;
+        HashSet<string> resolvedNames = new(names.Values, StringComparer.Ordinal);
+        if (resolvedNames.Count == 0)
+        {
+            IArgumentOperation? nameArgument = invocation.Arguments.FirstOrDefault(
+                argument => argument.Parameter?.Ordinal == 0);
+            if (nameArgument is not null)
+            {
+                resolvedNames.UnionWith(
+                    DescribeGlobalNamePatterns(nameArgument.Value));
+            }
+        }
+        foreach (string name in resolvedNames)
+            _globalEffects.Add(new GlobalAccessEffect(name, type, isOptional));
+        return true;
+    }
+
+    private ProvenanceValue EvaluateSwitchExpression(
+        ISwitchExpressionOperation switchExpression,
+        TypeInfoFlowState state)
+    {
+        StringValue values = StringValue.Bottom;
+        _ = Evaluate(switchExpression.Value, state);
+        foreach (ISwitchExpressionArmOperation arm in switchExpression.Arms)
+            values = values.Join(Evaluate(arm.Value, state).Strings);
+        return ProvenanceValue.FromString(values);
+    }
+
+    private static string[] DescribeGlobalNamePatterns(
+        IOperation operation)
+    {
+        operation = OperationInspector.Unwrap(operation);
+        if (operation.ConstantValue is { HasValue: true, Value: string text })
+            return [text];
+
+        if (operation is ILocalReferenceOperation local &&
+            local.Type?.SpecialType == SpecialType.System_String)
+        {
+            return [$"<{local.Local.Name}>"];
+        }
+
+        if (operation is IParameterReferenceOperation parameter &&
+            parameter.Type?.SpecialType == SpecialType.System_String)
+        {
+            return [$"<{parameter.Parameter.Name}>"];
+        }
+
+        if (operation is IInvocationOperation
+            {
+                TargetMethod.Name: nameof(ToString),
+                Arguments.Length: 0,
+                Instance.Type.TypeKind: TypeKind.Enum,
+            } invocation)
+        {
+            return [$"<{invocation.Instance!.Type!.Name}>"];
+        }
+
+        if (operation is IBinaryOperation
+            {
+                OperatorKind: BinaryOperatorKind.Add,
+                Type.SpecialType: SpecialType.System_String,
+            } binary)
+        {
+            string[] left =
+                DescribeGlobalNamePatterns(binary.LeftOperand);
+            string[] right =
+                DescribeGlobalNamePatterns(binary.RightOperand);
+            return (
+                from leftPart in left
+                from rightPart in right
+                select leftPart + rightPart).ToArray();
+        }
+
+        return operation.Type?.SpecialType == SpecialType.System_String
+            ? ["<unknown>"]
+            : [];
     }
 
     private ProvenanceValue EvaluateArgument(

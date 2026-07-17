@@ -74,6 +74,39 @@ internal sealed class FieldUsageMarkdownWriter : IReportWriter
     }
 }
 
+/// <summary>Emits <c>contract-global-usage.md</c>: globals read per contract/version.</summary>
+internal sealed class GlobalUsageMarkdownWriter : IReportWriter
+{
+    public string Write(UsageGraph graph, string outputDirectory)
+    {
+        StringBuilder sb = new();
+        sb.AppendLine("# cDAC Contract/Version -> Global Usage");
+        sb.AppendLine();
+        sb.AppendLine("| Contract | Version | Global | Type | Access |");
+        sb.AppendLine("|---|---|---|---|---|");
+        foreach (KeyValuePair<
+            (ContractLabel Label, string Global),
+            GlobalUsageInfo> entry in graph.GlobalUsage
+                .OrderBy(entry => entry.Key.Label.Contract, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Key.Label.Version, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Key.Global, StringComparer.Ordinal))
+        {
+            string types = string.Join(
+                " / ",
+                entry.Value.Types.OrderBy(type => type, StringComparer.Ordinal));
+            string access = entry.Value.IsOptional ? "Optional" : "Required";
+            sb.AppendLine(
+                $"| {entry.Key.Label.Contract} | {entry.Key.Label.Version} | " +
+                $"{entry.Key.Global} | {types} | {access} |");
+        }
+
+        File.WriteAllText(
+            Path.Combine(outputDirectory, "contract-global-usage.md"),
+            sb.ToString());
+        return $"contract-global-usage.md ({graph.GlobalUsage.Count} contract/global edges)";
+    }
+}
+
 /// <summary>Emits <c>contract-contracts-used.md</c>: (contract, version) -&gt; other contracts used.</summary>
 internal sealed class ContractsUsedMarkdownWriter : IReportWriter
 {

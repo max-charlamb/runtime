@@ -33,20 +33,26 @@ public sealed class DocsAreUpToDateTests
 
         Assert.True(
             drifted.Count == 0,
-            $"The generated data-descriptor doc blocks are out of date for: {string.Join(", ", drifted)}. " +
+            $"The generated usage doc blocks are out of date for: {string.Join(", ", drifted)}. " +
             "Run 'CdacUsageGraph docs' (or generate-docs.ps1) and commit the result.");
     }
 
     [Theory]
-    [InlineData("<!-- BEGIN GENERATED: data-descriptors contract=Thread version=c1 -->")]
+    [InlineData("<!-- BEGIN GENERATED: usage contract=Thread version=c1 -->")]
     [InlineData(
         "<!-- BEGIN GENERATED: unknown contract=Thread version=c1 -->\n" +
         "<!-- END GENERATED: unknown contract=Thread version=c1 -->")]
     [InlineData(
-        "<!-- BEGIN GENERATED: contracts-used contract=Thread version=c1 -->\n" +
-        "<!-- END GENERATED: contracts-used contract=Thread version=c1 -->\n" +
+        "<!-- BEGIN GENERATED: data-descriptors contract=Thread version=c1 -->\n" +
+        "<!-- END GENERATED: data-descriptors contract=Thread version=c1 -->")]
+    [InlineData(
         "<!-- BEGIN GENERATED: contracts-used contract=Thread version=c1 -->\n" +
         "<!-- END GENERATED: contracts-used contract=Thread version=c1 -->")]
+    [InlineData(
+        "<!-- BEGIN GENERATED: usage contract=Thread version=c1 -->\n" +
+        "<!-- END GENERATED: usage contract=Thread version=c1 -->\n" +
+        "<!-- BEGIN GENERATED: usage contract=Thread version=c1 -->\n" +
+        "<!-- END GENERATED: usage contract=Thread version=c1 -->")]
     public void RejectsInvalidGeneratedMarkers(string content)
     {
         using TempDirectory temp = new();
@@ -72,8 +78,8 @@ public sealed class DocsAreUpToDateTests
         using TempDirectory temp = new();
         string path = Path.Combine(temp.Path, "Thread.md");
         File.WriteAllText(path,
-            "<!-- BEGIN GENERATED: data-descriptors contract=Thread version=c1 -->\n" +
-            "<!-- END GENERATED: data-descriptors contract=Thread version=c1 -->");
+            "<!-- BEGIN GENERATED: usage contract=Thread version=c1 -->\n" +
+            "<!-- END GENERATED: usage contract=Thread version=c1 -->");
         UsageGraph graph = new(
             "",
             1,
@@ -86,12 +92,24 @@ public sealed class DocsAreUpToDateTests
                         ["_state"] = new[] { UsageKind.Read },
                     },
             },
+            new Dictionary<
+                (string DataType, string Field),
+                IReadOnlyCollection<string>>
+            {
+                [("Data.System.Threading.Lock", "_state")] = ["int32"],
+            },
+            new Dictionary<
+                (ContractLabel Label, string Global),
+                GlobalUsageInfo>(),
+            new Dictionary<ContractLabel, IReadOnlyCollection<string>>(),
             new Dictionary<ContractLabel, IReadOnlyCollection<string>>());
 
         new DocGenerator(graph, DocDescriptorMeanings.Empty).Emit(temp.Path);
 
         string generated = File.ReadAllText(path);
-        Assert.Contains("| `System.Threading.Lock` | `_state` | _TODO: describe_ |", generated);
+        Assert.Contains(
+            "| `System.Threading.Lock` | `_state` | `int32` | _TODO: describe_ |",
+            generated);
     }
 
     private static UsageGraph EmptyGraph() => new(

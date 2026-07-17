@@ -76,12 +76,7 @@ internal sealed partial class DocGenerator
             string version = m.Groups["v"].Value;
             string begin = $"<!-- BEGIN GENERATED: {kind} contract={contract} version={version} -->";
             string end = $"<!-- END GENERATED: {kind} contract={contract} version={version} -->";
-            IReadOnlyList<string> table = kind switch
-            {
-                "data-descriptors" => BuildDataDescriptors(contract, version),
-                "contracts-used" => BuildContractsUsed(contract, version),
-                _ => [],
-            };
+            IReadOnlyList<string> table = BuildUsage(contract, version);
             return string.Join(newline, new[] { begin }.Concat(table).Append(end));
         });
     }
@@ -102,7 +97,7 @@ internal sealed partial class DocGenerator
         foreach (Match block in blocks)
         {
             string kind = block.Groups["kind"].Value;
-            if (kind is not ("data-descriptors" or "contracts-used"))
+            if (kind != "usage")
                 throw new InvalidOperationException($"Unknown generated-doc marker kind '{kind}'.");
 
             (string, string, string) key = (
@@ -122,7 +117,7 @@ internal sealed partial class DocGenerator
         ContractLabel label = new($"I{contractShort}", version);
 
         // "Type.Field" set (type prefix stripped of the leading "Data.").
-        SortedSet<string> keys = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> keys = new(StringComparer.Ordinal);
         foreach (KeyValuePair<(ContractLabel Label, string DataType), IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>> kv in _graph.FieldUsage)
         {
             if (kv.Key.Label != label)
@@ -138,15 +133,76 @@ internal sealed partial class DocGenerator
 
         List<string> rows = new()
         {
-            "| Data Descriptor Name | Field | Meaning |",
-            "| --- | --- | --- |",
+            "| Data Descriptor | Field | Type | Meaning |",
+            "| --- | --- | --- | --- |",
         };
-        foreach (string key in keys)
+        foreach (string key in keys
+            .OrderBy(key => key.Substring(0, key.LastIndexOf('.')),
+                StringComparer.OrdinalIgnoreCase)
+            .ThenBy(key => key.Substring(key.LastIndexOf('.') + 1),
+                StringComparer.OrdinalIgnoreCase))
         {
             int dot = key.LastIndexOf('.', StringComparison.Ordinal);
             string type = key.Substring(0, dot);
             string field = key.Substring(dot + 1);
-            rows.Add($"| `{type}` | `{field}` | {_meanings.Meaning(contractShort, key)} |");
+            string dataType = "Data." + type;
+            string nativeType = _graph.FieldTypes.TryGetValue(
+                (dataType, field),
+                out IReadOnlyCollection<string>? fieldTypes)
+                    ? string.Join(
+                        " / ",
+                        fieldTypes.OrderBy(value => value, StringComparer.Ordinal))
+                    : "unknown";
+            rows.Add(
+                $"| `{type}` | `{field}` | `{nativeType}` | " +
+                $"{_meanings.Meaning(contractShort, key)} |");
+        }
+        return rows;
+    }
+
+    private List<string> BuildUsage(string contractShort, string version)
+    {
+        List<string> rows =
+        [
+            "### Data descriptors used",
+            "",
+        ];
+        rows.AddRange(BuildDataDescriptors(contractShort, version));
+        rows.Add("");
+        rows.Add("### Global variables used");
+        rows.Add("");
+        rows.AddRange(BuildGlobalsUsed(contractShort, version));
+        rows.Add("");
+        rows.Add("### Contracts used");
+        rows.Add("");
+        rows.AddRange(BuildContractsUsed(contractShort, version));
+        return rows;
+    }
+
+    private List<string> BuildGlobalsUsed(string contractShort, string version)
+    {
+        ContractLabel label = new($"I{contractShort}", version);
+        List<string> rows =
+        [
+            "| Global | Type | Meaning |",
+            "| --- | --- | --- |",
+        ];
+        foreach (KeyValuePair<
+            (ContractLabel Label, string Global),
+            GlobalUsageInfo> entry in _graph.GlobalUsage
+                .Where(entry => entry.Key.Label == label)
+                .OrderBy(
+                    entry => entry.Key.Global,
+                    StringComparer.OrdinalIgnoreCase))
+        {
+            string types = string.Join(
+                " / ",
+                entry.Value.Types.OrderBy(type => type, StringComparer.Ordinal));
+            string meaning = _meanings.GlobalMeaning(
+                contractShort,
+                entry.Key.Global);
+            rows.Add(
+                $"| `{entry.Key.Global}` | `{types}` | {meaning} |");
         }
         return rows;
     }

@@ -17,6 +17,8 @@ internal sealed record UsageGraph(
     int DataTypeCount,
     IReadOnlyList<RegistrationInfo> Registrations,
     IReadOnlyDictionary<(ContractLabel Label, string DataType), IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>> FieldUsage,
+    IReadOnlyDictionary<(string DataType, string Field), IReadOnlyCollection<string>> FieldTypes,
+    IReadOnlyDictionary<(ContractLabel Label, string Global), GlobalUsageInfo> GlobalUsage,
     IReadOnlyDictionary<ContractLabel, IReadOnlyCollection<string>> ContractsUsed,
     IReadOnlyDictionary<ContractLabel, IReadOnlyCollection<string>> ReachableMethods)
 {
@@ -31,6 +33,8 @@ internal sealed record UsageGraph(
             dataTypeCount,
             registrations,
             fieldUsage,
+            new Dictionary<(string DataType, string Field), IReadOnlyCollection<string>>(),
+            new Dictionary<(ContractLabel Label, string Global), GlobalUsageInfo>(),
             contractsUsed,
             new Dictionary<ContractLabel, IReadOnlyCollection<string>>())
     {

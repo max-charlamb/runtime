@@ -98,6 +98,8 @@ internal sealed class UsageWalker
             _index.Count,
             regInfo,
             _collector.FieldUsage,
+            _collector.FieldTypes,
+            _collector.GlobalUsage,
             _collector.ContractsUsed,
             _collector.ReachableMethods);
     }
@@ -110,7 +112,10 @@ internal sealed class UsageWalker
         {
             ITypeSymbol r = GenericDispatch.Resolve(ta, subst);
             if (_index.IsDataType(r))
+            {
                 RecordType(label, r);
+                RecordDataFactoryGlobals(r, label);
+            }
         }
 
         IMethodSymbol callee = inv.TargetMethod;
@@ -152,7 +157,45 @@ internal sealed class UsageWalker
             string dataName = _index.TryGetType(effect.Field.TypeName, out DataTypeInfo dataType)
                 ? DataName(dataType)
                 : "Data." + effect.Field.TypeName;
-            _collector.RecordField(label, dataName, effect.Field.FieldName, effect.Usage);
+            string fieldType = dataType?.GetNativeFieldType(effect.Field.FieldName)
+                ?? (effect.Field.FieldName == "Size" ? "uint32" : "unknown");
+            _collector.RecordField(
+                label,
+                dataName,
+                effect.Field.FieldName,
+                fieldType,
+                effect.Usage);
+        }
+        foreach (GlobalAccessEffect effect in
+            _dataFlowResolver.GetGlobalAccessEffects(member))
+        {
+            _collector.RecordGlobal(
+                label,
+                effect.Name,
+                effect.Type,
+                effect.IsOptional);
+        }
+    }
+
+    private void RecordDataFactoryGlobals(
+        ITypeSymbol type,
+        ContractLabel label)
+    {
+        if (_dataFlowResolver is null ||
+            type is not INamedTypeSymbol dataType ||
+            GenericDispatch.FindDataFactory(dataType) is not IMethodSymbol factory)
+        {
+            return;
+        }
+
+        foreach (GlobalAccessEffect effect in
+            _dataFlowResolver.GetGlobalAccessEffects(factory))
+        {
+            _collector.RecordGlobal(
+                label,
+                effect.Name,
+                effect.Type,
+                effect.IsOptional);
         }
     }
 
@@ -233,12 +276,22 @@ internal sealed class UsageWalker
         DataPropertyInfo info = dataType.GetProperty(property);
         if (info.Kind == DataPropertyKind.DirectField)
         {
-            RecordField(label, dataType, info.NativeName, kind);
+            RecordField(
+                label,
+                dataType,
+                info.NativeName,
+                info.NativeType,
+                kind);
             return;
         }
         if (info.Kind == DataPropertyKind.TypeSize)
         {
-            RecordField(label, dataType, "Size", UsageKind.Read);
+            RecordField(
+                label,
+                dataType,
+                "Size",
+                "uint32",
+                UsageKind.Read);
             return;
         }
 
@@ -302,15 +355,13 @@ internal sealed class UsageWalker
     private void RecordType(ContractLabel label, DataTypeInfo type) =>
         _collector.RecordType(label, DataName(type));
 
-    private void RecordField(ContractLabel label, ITypeSymbol dataType, string field, UsageKind kind) =>
-        _collector.RecordField(
-            label,
-            _index.TryGetDataType(dataType, out DataTypeInfo info) ? DataName(info) : "Data." + dataType.Name,
-            field,
-            kind);
-
-    private void RecordField(ContractLabel label, DataTypeInfo dataType, string field, UsageKind kind) =>
-        _collector.RecordField(label, DataName(dataType), field, kind);
+    private void RecordField(
+        ContractLabel label,
+        DataTypeInfo dataType,
+        string field,
+        string type,
+        UsageKind kind) =>
+        _collector.RecordField(label, DataName(dataType), field, type, kind);
 
     // ---- member enumeration & body resolution ----------------------------------------------
 
