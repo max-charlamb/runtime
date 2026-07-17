@@ -121,6 +121,23 @@ public sealed class DataTypeIndexTests
     }
 
     [Fact]
+    public void ParsesNativeDescriptorFieldTypes()
+    {
+        NativeDescriptorFieldTypeIndex index = NativeDescriptorFieldTypeIndex.Parse(
+        [
+            "CDAC_TYPE_FIELD(Hash, T_POINTER, Buckets, cdac_data<Hash>::Buckets)",
+            "CDAC_TYPE_FIELD(Hash, T_UINT32, Count, cdac_data<Hash>::Count)",
+            "CDAC_TYPE_FIELD(Container, TYPE(ObjectHandle), Handle, cdac_data<Container>::Handle)",
+            "CDAC_TYPE_FIELD(Buffer, T_ARRAY(T_UINT8), Bytes, cdac_data<Buffer>::Bytes)",
+        ]);
+
+        Assert.Equal("pointer", index.GetType("Hash", "Buckets"));
+        Assert.Equal("uint32", index.GetType("Hash", "Count"));
+        Assert.Equal("ObjectHandle", index.GetType("Container", "Handle"));
+        Assert.Equal("uint8[]", index.GetType("Buffer", "Bytes"));
+    }
+
+    [Fact]
     public void DiscoversCdacTypeDataTypes()
     {
         (CSharpCompilation compilation, INamedTypeSymbol widget) = BuildWidget();

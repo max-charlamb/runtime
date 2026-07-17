@@ -67,7 +67,9 @@ which of their `[Field]` descriptor fields the contract implementation uses.
    Parsed aggregate properties assigned by `OnInit`
    (e.g. `EETypeHashTable.Entries`) are replaced by those actual underlying fields.
    Constructor-derived aggregates (e.g. Loader's `DynamicILBlobTable.HashTable`) are
-   handled similarly. Each Data type has one ordered cDAC name set from
+   handled similarly. Native field storage types come from the managed Data property metadata,
+   with `datadescriptor.inc` used as the fallback for fields consumed only through shared helpers.
+   Each Data type has one ordered cDAC name set from
    `[CdacType]`: the first name is used in reports and all names are available for
    layout lookup. This handles adapter names (`DynamicILBlobEntry` ->
    `DynamicILBlobTable`) and managed layout names without requiring a `DataType`

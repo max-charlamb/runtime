@@ -22,6 +22,7 @@ internal sealed class UsageWalker
     private readonly CSharpCompilation _compilation;
     private readonly DataTypeIndex _index;
     private readonly DataFlowTypeInfoResolver? _dataFlowResolver;
+    private readonly NativeDescriptorFieldTypeIndex _nativeFieldTypes;
     private readonly SymbolEqualityComparer _cmp = SymbolEqualityComparer.Default;
 
     private readonly Queue<WorkItem> _queue = new();
@@ -33,11 +34,13 @@ internal sealed class UsageWalker
     public UsageWalker(
         CSharpCompilation compilation,
         DataTypeIndex index,
-        DataFlowTypeInfoResolver dataFlowResolver)
+        DataFlowTypeInfoResolver dataFlowResolver,
+        NativeDescriptorFieldTypeIndex? nativeFieldTypes = null)
     {
         _compilation = compilation;
         _index = index;
         _dataFlowResolver = dataFlowResolver;
+        _nativeFieldTypes = nativeFieldTypes ?? NativeDescriptorFieldTypeIndex.Empty;
         _visited = new HashSet<WorkItem>(new WorkItemComparer(_cmp));
     }
 
@@ -47,6 +50,7 @@ internal sealed class UsageWalker
     {
         _compilation = compilation;
         _index = index;
+        _nativeFieldTypes = NativeDescriptorFieldTypeIndex.Empty;
         _visited = new HashSet<WorkItem>(new WorkItemComparer(_cmp));
     }
 
@@ -158,6 +162,9 @@ internal sealed class UsageWalker
                 ? DataName(dataType)
                 : "Data." + effect.Field.TypeName;
             string fieldType = dataType?.GetNativeFieldType(effect.Field.FieldName)
+                ?? _nativeFieldTypes.GetType(
+                    effect.Field.TypeName,
+                    effect.Field.FieldName)
                 ?? (effect.Field.FieldName == "Size" ? "uint32" : "unknown");
             _collector.RecordField(
                 label,

@@ -60,9 +60,15 @@ internal sealed class AnalysisPipeline
                 "contract registrations. The cDAC compilation input is likely broken or has drifted.");
 
         DataFlowTypeInfoResolver dataFlowResolver = new(workspace);
+        NativeDescriptorFieldTypeIndex nativeFieldTypes =
+            NativeDescriptorFieldTypeIndex.Load(cdacRoot);
 
         // Phase C/D: forward interprocedural walk.
-        return new UsageWalker(compilation, index, dataFlowResolver).Walk(registrations, cdacRoot);
+        return new UsageWalker(
+            compilation,
+            index,
+            dataFlowResolver,
+            nativeFieldTypes).Walk(registrations, cdacRoot);
     }
 
     public int Run()

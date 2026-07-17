@@ -162,6 +162,28 @@ public sealed class UsageWalkerIntegrationTests
     }
 
     [Theory]
+    [InlineData("EETypeHashTable", "Buckets", "pointer")]
+    [InlineData("EETypeHashTable", "Count", "uint32")]
+    [InlineData("EETypeHashTable", "VolatileEntryNextEntry", "pointer")]
+    [InlineData("EETypeHashTable", "VolatileEntryValue", "pointer")]
+    [InlineData("InstMethodHashTable", "Buckets", "pointer")]
+    [InlineData("InstMethodHashTable", "Count", "uint32")]
+    [InlineData("InstMethodHashTable", "VolatileEntryNextEntry", "pointer")]
+    [InlineData("InstMethodHashTable", "VolatileEntryValue", "pointer")]
+    public void ResolvesNativeTypesForFieldsReadThroughHelpers(
+        string dataType,
+        string field,
+        string expectedType)
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+
+        Assert.Equal(
+            [expectedType],
+            built.Value.Graph.FieldTypes[($"Data.{dataType}", field)]);
+    }
+
+    [Theory]
     [InlineData("IExecutionManager", "c1", "Data.R2RExceptionClause", "Size", "Read")]
     [InlineData("IExecutionManager", "c1", "Data.UnwindInfo", "FunctionLength", "OffsetLookup")]
     [InlineData("IPrecodeStubs", "c1", "Data.PrecodeMachineDescriptor", "OffsetOfPrecodeType", "OffsetLookup")]
