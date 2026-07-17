@@ -102,7 +102,7 @@ internal sealed class DataTypeInfo
         if (HasComputedGetter(definition))
             return new DataPropertyInfo(definition, DataPropertyKind.Computed, property.Name, [definition]);
 
-        List<ISymbol> onInitMembers = OnInitMembersInitializing(definition);
+        List<ISymbol> onInitMembers = OnInitMembersInitializing(compilation, definition, comparer);
         if (onInitMembers.Count > 0)
             return new DataPropertyInfo(definition, DataPropertyKind.OnInitDerived, property.Name, onInitMembers);
 
@@ -130,32 +130,31 @@ internal sealed class DataTypeInfo
         return false;
     }
 
-    private static List<ISymbol> OnInitMembersInitializing(IPropertySymbol property)
+    private static List<ISymbol> OnInitMembersInitializing(
+        CSharpCompilation compilation,
+        IPropertySymbol property,
+        SymbolEqualityComparer comparer)
     {
         List<ISymbol> members = [];
         foreach (IMethodSymbol method in property.ContainingType
             .GetMembers(CdacSymbols.DataInitializerMethodName).OfType<IMethodSymbol>())
         {
-            foreach (AttributeData attribute in method.GetAttributes())
+            IMethodSymbol implementation = method.PartialImplementationPart ?? method;
+            foreach (SyntaxReference reference in implementation.DeclaringSyntaxReferences)
             {
-                if (attribute.AttributeClass?.ToDisplayString() != CdacSymbols.MemberNotNullAttributeMetadataName)
+                SyntaxNode syntax = reference.GetSyntax();
+                SemanticModel model = compilation.GetSemanticModel(syntax.SyntaxTree);
+                if (model.GetOperation(syntax) is not IOperation body)
                     continue;
-                if (attribute.ConstructorArguments.Any(a => ContainsPropertyName(a, property.Name)))
+                if (AssignsProperty(body, property, comparer))
                 {
-                    IMethodSymbol implementation = method.PartialImplementationPart ?? method;
-                    if (implementation.DeclaringSyntaxReferences.Length > 0)
-                        members.Add(implementation);
+                    members.Add(implementation);
                     break;
                 }
             }
         }
         return members;
     }
-
-    private static bool ContainsPropertyName(TypedConstant argument, string propertyName) =>
-        argument.Kind == TypedConstantKind.Array
-            ? argument.Values.Any(v => v.Value is string name && name == propertyName)
-            : argument.Value is string name && name == propertyName;
 
     private static List<ISymbol> ConstructorsInitializing(
         CSharpCompilation compilation,
@@ -171,9 +170,7 @@ internal sealed class DataTypeInfo
                 SemanticModel model = compilation.GetSemanticModel(syntax.SyntaxTree);
                 if (model.GetOperation(syntax) is not IOperation body)
                     continue;
-                if (body.DescendantsAndSelf().OfType<ISimpleAssignmentOperation>().Any(
-                    assignment => assignment.Target is IPropertyReferenceOperation target &&
-                        comparer.Equals(target.Property.OriginalDefinition, property.OriginalDefinition)))
+                if (AssignsProperty(body, property, comparer))
                 {
                     constructors.Add(constructor.OriginalDefinition);
                     break;
@@ -181,6 +178,29 @@ internal sealed class DataTypeInfo
             }
         }
         return constructors;
+    }
+
+    private static bool AssignsProperty(
+        IOperation body,
+        IPropertySymbol property,
+        SymbolEqualityComparer comparer)
+    {
+        foreach (IOperation operation in body.DescendantsAndSelf())
+        {
+            IOperation? target = operation switch
+            {
+                ISimpleAssignmentOperation assignment => assignment.Target,
+                ICompoundAssignmentOperation assignment => assignment.Target,
+                IIncrementOrDecrementOperation increment => increment.Target,
+                _ => null,
+            };
+            if (target is IPropertyReferenceOperation propertyReference &&
+                comparer.Equals(
+                    propertyReference.Property.OriginalDefinition,
+                    property.OriginalDefinition))
+                return true;
+        }
+        return false;
     }
 
     private static bool TryGetNativeFieldName(IPropertySymbol property, out string nativeName)

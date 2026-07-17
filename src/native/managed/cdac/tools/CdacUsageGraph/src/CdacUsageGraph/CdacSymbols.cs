@@ -10,13 +10,26 @@ namespace CdacUsageGraph;
 /// </summary>
 internal static class CdacSymbols
 {
+    public const string AbstractionsProjectName = "Microsoft.Diagnostics.DataContractReader.Abstractions";
     public const string ContractsProjectDirectory = "Microsoft.Diagnostics.DataContractReader.Contracts";
     public const string ContractsProjectFile = "Microsoft.Diagnostics.DataContractReader.Contracts.csproj";
 
     public const string ContractRegistryMetadataName =
         "Microsoft.Diagnostics.DataContractReader.ContractRegistry";
+    public const string TargetMetadataName =
+        "Microsoft.Diagnostics.DataContractReader.Target";
+    public const string TargetTypeInfoMetadataName =
+        "Microsoft.Diagnostics.DataContractReader.Target+TypeInfo";
+    public const string TargetFieldInfoMetadataName =
+        "Microsoft.Diagnostics.DataContractReader.Target+FieldInfo";
+    public const string TargetDataCacheMetadataName =
+        "Microsoft.Diagnostics.DataContractReader.Target+IDataCache";
     public const string IContractMetadataName =
         "Microsoft.Diagnostics.DataContractReader.Contracts.IContract";
+    public const string IManagedTypeSourceMetadataName =
+        "Microsoft.Diagnostics.DataContractReader.Contracts.IManagedTypeSource";
+    public const string DataTypeNamesMetadataName =
+        "Microsoft.Diagnostics.DataContractReader.DataTypeNames";
     public const string CoreCLRContractsMetadataName =
         "Microsoft.Diagnostics.DataContractReader.Contracts.CoreCLRContracts";
     public const string IDataMetadataName =
@@ -32,13 +45,11 @@ internal static class CdacSymbols
         "Microsoft.Diagnostics.DataContractReader.RawOffsetAttribute";
     public const string InstanceDataStartAttributeMetadataName =
         "Microsoft.Diagnostics.DataContractReader.InstanceDataStartAttribute";
-    public const string MemberNotNullAttributeMetadataName =
-        "System.Diagnostics.CodeAnalysis.MemberNotNullAttribute";
-
     public const string ContractRegistrationMethodName = "Register";
     public const string DataInitializerMethodName = "OnInit";
-    public const string DataTypeEnumName = "DataType";
     public const string TargetTypeName = "Target";
     public const string TypeInfoTypeName = "TypeInfo";
     public const string GetTypeInfoMethodName = "GetTypeInfo";
+    public const string TryGetTypeInfoMethodName = "TryGetTypeInfo";
+    public const string ToNameMethodName = "ToName";
 }

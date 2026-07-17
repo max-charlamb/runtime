@@ -20,38 +20,47 @@ which of their `[Field]` descriptor fields the contract implementation uses.
 2. Parses `CoreCLRContracts.Register` to map `(interface, version) -> impl type`.
 3. Discovers real `IData<TSelf>` Data types and their
    `[Field]`/`[FieldAddress]` properties.
-4. Performs a **forward interprocedural walk** from each contract impl's members
-   (methods, constructors, and **field/property initializers**), propagating a
-   `(contract, version)` label through:
+4. Performs a **forward interprocedural specialization walk** from each registered
+   contract interface implementation, its selected constructor, and
+   **field/property initializers**, propagating a `(contract, version)` label through:
    - helper method calls (into the same assembly),
    - constructed helper objects (`new FrameHelpers(...)`), including those built in
      field initializers (e.g. `StressLog_1`'s `new SmallStressMessageReader(...)`),
+   - method-group callbacks passed across contract boundaries,
    - base/generic-base classes (with type-parameter substitution),
-   - virtual dispatch into nested classes,
+   - virtual/interface dispatch over the contract's reachable constructed types,
    - reads through a shared Data-implemented interface (e.g. an `IExceptionClauseData`
      or `IGCHeap` local that may hold one of several Data types at runtime -- each
      implementing Data type's `[Field]` members are conservatively attributed), and
    - static-abstract dispatch through a generic type parameter
      (`TImpl.StubPrecode_GetMethodDesc(...)`).
-5. Collects usage in one `OperationWalker` pass into a single per-`(contract, version,
-   Data type)` field map (the set of Data types used is derivable from its keys):
+   Generic contract bases are specialized per registered version, so static-abstract
+   and virtual calls reach only that version's concrete implementation.
+5. Collects usage into a single per-`(contract, version, Data type)` field map (the set
+   of Data types used is derivable from its keys). `UsageWalker` owns contract reachability
+   and Data-property usage, while the CFG analysis contributes all `TypeInfo`-derived field
+   effects:
    - `GetOrAdd<Data.X>()` / generic type arguments / `new Data.X(...)` / `typeof` --
      recorded as a type usage (an entry with no field if nothing is read),
    - property value reads (`Read` / `Write` / `ReadWrite`). Reads of a **computed**
      Data property (one with a getter body, e.g. `Assembly.IsError => Error != Null`
      or `TLSIndex.IndexOffset => TLSIndexRawIndex & 0xFFFFFF`) are resolved to the
-     actual descriptor fields the getter reads, rather than the derived name;
-     auto-properties -- whether `[Field]` or `OnInit`-populated (e.g.
-     `Thread.ThreadHandle`) -- are real fields and recorded as-is,
+     actual descriptor fields the getter reads, rather than the derived name.
+     `[Field]` auto-properties are recorded directly; properties populated by
+     `OnInit` (e.g. `Thread.ThreadHandle`) expand to the descriptor reads in
+     the initializer,
    - `nameof(Data.X.Field)` and raw-string `TypeInfo.Fields["nativeName"]` offset
      lookups (`OffsetLookup`), and
    - `TypeInfo.Size` reads, recorded as a synthetic `Size` field.
-   `Target.TypeInfo` identities are propagated transitively through assignments,
-   method/constructor arguments, fields, and interface-to-implementation parameters
-   (as a set for reusable helpers), so
+   `Target.TypeInfo` identities are propagated by a Roslyn ControlFlowGraph analysis
+   through assignments, branch joins, loops, method returns, `out`/`ref` parameters,
+   method/constructor arguments, fields, and interface-to-implementation parameters,
+   so
    `Read*Field(..., typeInfo, nameof(Field))` and `typeInfo.Fields[nameof(Field)]`
-   inside helpers such as `DacEnumerableHash` are attributed to each concrete Data
-   type. Parsed aggregate properties declared through `MemberNotNull`/`OnInit`
+   inside helpers such as `DacEnumerableHash` are reduced to field-access effects and
+   attributed to each concrete Data type by `UsageWalker`. The walker does not maintain
+   a separate name-based `TypeInfo` correlator or helper-method summaries.
+   Parsed aggregate properties assigned by `OnInit`
    (e.g. `EETypeHashTable.Entries`) are replaced by those actual underlying fields.
    Constructor-derived aggregates (e.g. Loader's `DynamicILBlobTable.HashTable`) are
    handled similarly. Each Data type has one ordered cDAC name set from
@@ -91,8 +100,8 @@ CdacUsageGraph/                        # tool root (part of the Arcade build)
 │   └── CdacUsageGraph/                # the tool (Exe): thin Program.cs + all analysis logic
 │       ├── AnalysisOptions.cs, AnalysisPipeline.cs, Commands.cs, Locator.cs, Program.cs
 │       ├── Compilation/               # CdacWorkspaceLoader / MSBuildWorkspace (phase A)
-│       ├── Discovery/                 # DataTypeInfo/Index, ContractRegistrationParser, TypeInfoCorrelator (phase B)
-│       ├── Analysis/                  # UsageWalker (OperationWalker), UsageCollector, OperationInspector (phase C/D)
+│       ├── Discovery/                 # DataTypeInfo/Index, ContractRegistrationParser (phase B)
+│       ├── Analysis/                  # UsageWalker plus CFG DataFlow effects (phase C/D)
 │       ├── Model/                     # UsageGraph, RegistrationInfo (immutable result)
 │       ├── Reporting/                 # IReportWriter + Markdown/JSON writers (phase E)
 │       └── Docs/                      # DocGenerator + DocDescriptorMeanings (fills the docs marker blocks)
@@ -110,6 +119,7 @@ test project references it via `<ProjectReference>` + `InternalsVisibleTo`.
 | `contract-data-graph.md`      | `(contract, version) -> Data types` table |
 | `contract-field-usage.md`     | `(contract, version, Data.Type, field) -> usage kind` rows |
 | `contract-contracts-used.md`  | `(contract, version) -> other contracts used` (`_target.Contracts.<X>`) |
+| `contract-methods-reachable.md` | `(contract, version) -> reachable specialized method contexts` |
 | `contract-usage.json`         | Machine-readable graph |
 
 ### Tests
@@ -153,23 +163,20 @@ a silently under-reported graph.
 
 ## Known limitations
 
-- **Over-approximation (conservative by design).** The walk seeds from *all* of a contract
-  implementation's methods and follows *all* methods of the helpers/base types it constructs, so a
-  descriptor is reported if it is reachable on *any* path -- including paths that are never actually
-  taken at runtime. The tables answer "what could this contract read", not precise reachability.
-  Use the `_suppress` list in `data-descriptor-meanings.json` to prune specific false positives.
-- Field access through **indirect `TypeInfo` flows** (a `Target.TypeInfo` returned
-  from a helper method, or stored in a collection) is not traced.
-- `TypeInfo` propagation is **context-insensitive**: a reusable symbol accumulates
-  every DataType that can flow to it. This is conservative and can over-attribute
-  fields if the same helper is called by different contracts with different TypeInfos.
+- **Conservative method bodies.** Every operation in a reachable method body is considered.
+  Version-specific capabilities should therefore be represented by version-specific methods
+  rather than conditions inside a shared implementation.
+- `TypeInfo` values stored inside arbitrary **collections/arrays** are not tracked.
+  Locals, parameters, returns, `out`/`ref`, fields, calls, branches, and loops are
+  flow-analyzed.
 - **Interface-typed reads are conservative.** When a contract reads a member through
   an interface implemented by several Data types (e.g. `IExceptionClauseData`,
   `IGCHeap`), the read is attributed to *every* implementing Data type -- the concrete
   runtime type can't be known statically. Each implementation uses the same property
   provenance rules as a direct read, so computed/parsed properties resolve to their
   actual underlying fields.
-- **Delegate / `Func<>`** call edges are not resolved (as with any static analysis).
+- Reachable method-group callbacks and inline anonymous-function bodies are analyzed. Delegate
+  values flowing through arbitrary fields, collections, or external factories remain conservative.
 - **Cross-contract** dependencies are correctly *not* attributed to the caller: a
   contract that calls `_target.Contracts.<X>` records `X` in its **Contracts used**
   list rather than absorbing `X`'s data descriptors.

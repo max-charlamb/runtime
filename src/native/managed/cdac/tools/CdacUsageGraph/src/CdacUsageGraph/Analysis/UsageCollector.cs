@@ -16,6 +16,7 @@ internal sealed class UsageCollector
 {
     private readonly Dictionary<(ContractLabel, string), Dictionary<string, HashSet<UsageKind>>> _fieldUsage = new();
     private readonly Dictionary<ContractLabel, HashSet<string>> _contractsUsed = new();
+    private readonly Dictionary<ContractLabel, HashSet<string>> _reachableMethods = new();
 
     /// <summary>Records that <paramref name="dataName"/> is used, even if no field is read.</summary>
     public void RecordType(ContractLabel label, string dataName) => GetOrAddType(label, dataName);
@@ -36,6 +37,13 @@ internal sealed class UsageCollector
         set.Add(contractName);
     }
 
+    public void RecordReachableMethod(ContractLabel label, string method)
+    {
+        if (!_reachableMethods.TryGetValue(label, out HashSet<string>? methods))
+            _reachableMethods[label] = methods = new HashSet<string>(StringComparer.Ordinal);
+        methods.Add(method);
+    }
+
     public IReadOnlyDictionary<(ContractLabel Label, string DataType), IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>> FieldUsage =>
         _fieldUsage.ToDictionary(
             kv => kv.Key,
@@ -44,6 +52,11 @@ internal sealed class UsageCollector
 
     public IReadOnlyDictionary<ContractLabel, IReadOnlyCollection<string>> ContractsUsed =>
         _contractsUsed.ToDictionary(kv => kv.Key, kv => (IReadOnlyCollection<string>)kv.Value);
+
+    public IReadOnlyDictionary<ContractLabel, IReadOnlyCollection<string>> ReachableMethods =>
+        _reachableMethods.ToDictionary(
+            kv => kv.Key,
+            kv => (IReadOnlyCollection<string>)kv.Value);
 
     private Dictionary<string, HashSet<UsageKind>> GetOrAddType(ContractLabel label, string dataName)
     {

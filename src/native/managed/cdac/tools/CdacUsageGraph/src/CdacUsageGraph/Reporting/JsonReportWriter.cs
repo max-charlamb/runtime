@@ -20,6 +20,7 @@ internal sealed class JsonReportWriter : IReportWriter
         string[] impls,
         string[] dataTypes,
         string[] contractsUsed,
+        string[] reachableMethods,
         Dictionary<string, Dictionary<string, string[]>> fieldUsage);
 
     public string Write(UsageGraph graph, string outputDirectory)
@@ -31,6 +32,9 @@ internal sealed class JsonReportWriter : IReportWriter
             {
                 ContractLabel label = new ContractLabel(g.Key.Contract, g.Key.Version);
                 graph.ContractsUsed.TryGetValue(label, out IReadOnlyCollection<string>? cset);
+                graph.ReachableMethods.TryGetValue(
+                    label,
+                    out IReadOnlyCollection<string>? methods);
                 Dictionary<string, Dictionary<string, string[]>> fields = graph.FieldUsage
                     .Where(k => k.Key.Label == label)
                     .OrderBy(k => k.Key.DataType, StringComparer.Ordinal)
@@ -48,6 +52,9 @@ internal sealed class JsonReportWriter : IReportWriter
                         .OrderBy(x => x, StringComparer.Ordinal).ToArray(),
                     ReportQueries.DataTypesUsed(graph, label).ToArray(),
                     (cset ?? Array.Empty<string>()).OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                    (methods ?? Array.Empty<string>()).OrderBy(
+                        method => method,
+                        StringComparer.Ordinal).ToArray(),
                     fields);
             })
             .ToList();

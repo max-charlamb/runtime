@@ -68,7 +68,12 @@ internal static class ContractRegistrationParser
                             compilation.IsAssignableTo(impl, iface) &&
                             compilation.IsAssignableTo(impl, iContract))
                         {
-                            registrations.Add(new ContractRegistration(iface.Name, version, impl));
+                            registrations.Add(new ContractRegistration(
+                                iface.Name,
+                                version,
+                                impl,
+                                iface,
+                                create.Constructor));
                         }
                     }
                 }

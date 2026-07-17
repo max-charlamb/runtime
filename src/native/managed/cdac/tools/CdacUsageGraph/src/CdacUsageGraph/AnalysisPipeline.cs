@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using CdacUsageGraph.Analysis;
+using CdacUsageGraph.Analysis.DataFlow;
 using CdacUsageGraph.Compilation;
 using CdacUsageGraph.Discovery;
 using CdacUsageGraph.Model;
@@ -21,6 +22,7 @@ internal sealed class AnalysisPipeline
         new DataGraphMarkdownWriter(),
         new FieldUsageMarkdownWriter(),
         new ContractsUsedMarkdownWriter(),
+        new ReachableMethodsMarkdownWriter(),
         new JsonReportWriter(),
     ];
 
@@ -41,8 +43,9 @@ internal sealed class AnalysisPipeline
         return BuildGraph(CdacWorkspaceLoader.Load(cdacRoot), cdacRoot);
     }
 
-    private static UsageGraph BuildGraph(CSharpCompilation compilation, string cdacRoot)
+    private static UsageGraph BuildGraph(CdacAnalysisWorkspace workspace, string cdacRoot)
     {
+        CSharpCompilation compilation = workspace.Contracts;
         // Phase B: discovery.
         DataTypeIndex index = DataTypeIndex.Build(compilation);
         IReadOnlyList<ContractRegistration> registrations = ContractRegistrationParser.Parse(compilation);
@@ -55,10 +58,10 @@ internal sealed class AnalysisPipeline
                 $"Sanity check failed: discovered {index.Count} Data types and {registrations.Count} " +
                 "contract registrations. The cDAC compilation input is likely broken or has drifted.");
 
-        TypeInfoCorrelator correlator = TypeInfoCorrelator.Build(compilation);
+        DataFlowTypeInfoResolver dataFlowResolver = new(workspace);
 
         // Phase C/D: forward interprocedural walk.
-        return new UsageWalker(compilation, index, correlator).Walk(registrations, cdacRoot);
+        return new UsageWalker(compilation, index, dataFlowResolver).Walk(registrations, cdacRoot);
     }
 
     public int Run()

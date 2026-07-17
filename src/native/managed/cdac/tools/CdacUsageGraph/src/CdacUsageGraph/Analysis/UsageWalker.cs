@@ -1,9 +1,11 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using CdacUsageGraph.Analysis.DataFlow;
 using CdacUsageGraph.Discovery;
 using CdacUsageGraph.Model;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -17,20 +19,34 @@ namespace CdacUsageGraph.Analysis;
 /// </summary>
 internal sealed class UsageWalker
 {
-    private readonly Microsoft.CodeAnalysis.Compilation _compilation;
+    private readonly CSharpCompilation _compilation;
     private readonly DataTypeIndex _index;
-    private readonly TypeInfoCorrelator _correlator;
+    private readonly DataFlowTypeInfoResolver? _dataFlowResolver;
     private readonly SymbolEqualityComparer _cmp = SymbolEqualityComparer.Default;
 
     private readonly Queue<WorkItem> _queue = new();
     private readonly HashSet<WorkItem> _visited;
+    private readonly Dictionary<ContractLabel, HashSet<INamedTypeSymbol>> _constructedTypes = [];
+    private readonly Dictionary<ContractLabel, List<PendingDispatch>> _pendingDispatches = [];
     private readonly UsageCollector _collector = new();
 
-    public UsageWalker(Microsoft.CodeAnalysis.Compilation compilation, DataTypeIndex index, TypeInfoCorrelator correlator)
+    public UsageWalker(
+        CSharpCompilation compilation,
+        DataTypeIndex index,
+        DataFlowTypeInfoResolver dataFlowResolver)
     {
         _compilation = compilation;
         _index = index;
-        _correlator = correlator;
+        _dataFlowResolver = dataFlowResolver;
+        _visited = new HashSet<WorkItem>(new WorkItemComparer(_cmp));
+    }
+
+    internal UsageWalker(
+        CSharpCompilation compilation,
+        DataTypeIndex index)
+    {
+        _compilation = compilation;
+        _index = index;
         _visited = new HashSet<WorkItem>(new WorkItemComparer(_cmp));
     }
 
@@ -39,9 +55,14 @@ internal sealed class UsageWalker
         foreach (ContractRegistration reg in registrations)
         {
             ContractLabel label = new ContractLabel(reg.Contract, reg.Version);
-            Dictionary<ITypeParameterSymbol, ITypeSymbol> seed = BuildSubst(reg.Impl, new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp));
-            foreach (ISymbol m in AllMembers(reg.Impl))
-                _queue.Enqueue(new WorkItem(m, label, seed));
+            AddConstructedType(label, reg.Impl);
+            Dictionary<ITypeParameterSymbol, ITypeSymbol> seed =
+                GenericDispatch.BuildSubstitutions(
+                    reg.Impl,
+                    new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp),
+                    _cmp);
+            foreach (ISymbol m in ContractEntryPointDiscovery.Discover(reg))
+                _queue.Enqueue(new WorkItem(m, label, seed, RecordDataFlowEffects: true));
         }
 
         while (_queue.Count > 0)
@@ -50,72 +71,88 @@ internal sealed class UsageWalker
             if (!_visited.Add(item))
                 continue;
 
+            if (item.Member is IMethodSymbol reachableMethod)
+            {
+                _collector.RecordReachableMethod(
+                    item.Label,
+                    FormatMethod(reachableMethod, item.Subst));
+            }
+            if (item.RecordDataFlowEffects)
+                RecordDataFlowEffects(item.Member, item.Label);
             foreach (IOperation body in GetMemberOperations(item.Member))
-                new BodyWalker(this, item.Member, item.Label, item.Subst).Visit(body);
+            {
+                new BodyWalker(
+                    this,
+                    item.Member,
+                    item.Label,
+                    item.Subst).Visit(body);
+            }
         }
 
         List<RegistrationInfo> regInfo = registrations
             .Select(r => new RegistrationInfo(r.Contract, r.Version, r.Impl.Name))
             .ToList();
 
-        return new UsageGraph(cdacRoot, _index.Count, regInfo, _collector.FieldUsage, _collector.ContractsUsed);
+        return new UsageGraph(
+            cdacRoot,
+            _index.Count,
+            regInfo,
+            _collector.FieldUsage,
+            _collector.ContractsUsed,
+            _collector.ReachableMethods);
     }
 
     // ---- per-operation handlers (called by the nested BodyWalker) --------------------------
 
     private void HandleInvocation(IInvocationOperation inv, ContractLabel label, Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
     {
-        HandleTypeInfoFieldRead(inv, label);
-
         foreach (ITypeSymbol ta in inv.TargetMethod.TypeArguments)
         {
-            ITypeSymbol r = Resolve(ta, subst);
+            ITypeSymbol r = GenericDispatch.Resolve(ta, subst);
             if (_index.IsDataType(r))
                 RecordType(label, r);
         }
 
         IMethodSymbol callee = inv.TargetMethod;
-        if (_cmp.Equals(callee.OriginalDefinition.ContainingAssembly, _compilation.Assembly))
+        if (IsCrossContractInvocation(callee, label))
+            EnqueueEscapingCallbacks(inv, label, subst);
+        if (RequiresDynamicDispatch(callee) &&
+            ShouldFollowDynamicDispatch(callee, label))
+        {
+            AddPendingDispatch(callee, label, subst);
+        }
+        else if (_cmp.Equals(
+            callee.OriginalDefinition.ContainingAssembly,
+            _compilation.Assembly) &&
+            !callee.IsAbstract &&
+            callee.ContainingType.TypeKind != TypeKind.Interface)
+        {
             EnqueueMember(callee, label, subst);
+        }
 
         // Static-abstract / type-parameter dispatch (e.g. TImpl.StubPrecode_GetMethodDesc(...)):
         // resolve the receiver type parameter to its concrete substitution and enqueue the impl.
-        ITypeSymbol? receiver = inv.ConstrainedToType
-            ?? (callee.ContainingType is ITypeParameterSymbol ? callee.ContainingType : null);
-        if (receiver is not null && Resolve(receiver, subst) is INamedTypeSymbol implType &&
-            _cmp.Equals(implType.OriginalDefinition.ContainingAssembly, _compilation.Assembly))
+        IMethodSymbol? concrete = GenericDispatch.ResolveStaticAbstractTarget(
+            _compilation,
+            inv,
+            subst);
+        if (concrete is not null)
         {
-            IMethodSymbol? concrete = FindConcreteMethod(implType, callee);
-            if (concrete is not null)
-                EnqueueMember(concrete, label, subst);
+            EnqueueMember(concrete, label, subst, recordDataFlowEffects: true);
         }
     }
 
-    // Target.Read*Field(address, typeInfo, nameof(Field)): a descriptor-field read expressed
-    // through the Target helper API rather than TypeInfo.Fields["..."]. The correlator follows the
-    // TypeInfo identity through aliases and helper parameters/fields, so reusable helpers such as
-    // DacEnumerableHash attribute these fields to every concrete Data type that can flow in.
-    private void HandleTypeInfoFieldRead(IInvocationOperation invocation, ContractLabel label)
+    private void RecordDataFlowEffects(ISymbol member, ContractLabel label)
     {
-        if (!invocation.TargetMethod.Name.StartsWith("Read", StringComparison.Ordinal) ||
-            !invocation.TargetMethod.Name.Contains("Field", StringComparison.Ordinal))
+        if (_dataFlowResolver is null)
             return;
 
-        IArgumentOperation? typeInfoArgument = invocation.Arguments.FirstOrDefault(
-            a => a.Parameter?.Type.Name == CdacSymbols.TypeInfoTypeName &&
-                a.Parameter.Type.ContainingType?.Name == CdacSymbols.TargetTypeName);
-        IArgumentOperation? fieldNameArgument = invocation.Arguments.FirstOrDefault(
-            a => a.Value.ConstantValue is { HasValue: true, Value: string });
-        if (typeInfoArgument is null ||
-            fieldNameArgument?.Value.ConstantValue is not { HasValue: true, Value: string fieldName })
-            return;
-
-        foreach (string dataTypeName in _correlator.GetTypeInfoDataNames(typeInfoArgument.Value))
+        foreach (FieldAccessEffect effect in _dataFlowResolver.GetFieldAccessEffects(member))
         {
-            string dataName = _index.TryGetType(dataTypeName, out DataTypeInfo dataType)
+            string dataName = _index.TryGetType(effect.Field.TypeName, out DataTypeInfo dataType)
                 ? DataName(dataType)
-                : "Data." + dataTypeName;
-            _collector.RecordField(label, dataName, fieldName, UsageKind.Read);
+                : "Data." + effect.Field.TypeName;
+            _collector.RecordField(label, dataName, effect.Field.FieldName, effect.Usage);
         }
     }
 
@@ -123,16 +160,23 @@ internal sealed class UsageWalker
     {
         if (oc.Type is not INamedTypeSymbol ct)
             return;
+        AddConstructedType(label, ct);
         if (_index.IsDataType(ct))
         {
             RecordType(label, ct);
         }
         else if (_cmp.Equals(ct.OriginalDefinition.ContainingAssembly, _compilation.Assembly))
         {
-            // A contract that constructs an in-assembly helper "uses" it: walk it.
-            Dictionary<ITypeParameterSymbol, ITypeSymbol> sub = BuildSubst(ct, subst);
-            foreach (ISymbol m in AllMembers(ct))
-                _queue.Enqueue(new WorkItem(m, label, sub));
+            // Construction reaches the selected constructor and the type's initializers. Other
+            // helper methods become reachable through invocation edges.
+            Dictionary<ITypeParameterSymbol, ITypeSymbol> sub =
+                GenericDispatch.BuildSubstitutions(ct, subst, _cmp);
+            foreach (ISymbol m in ContractEntryPointDiscovery.DiscoverConstruction(
+                ct,
+                oc.Constructor))
+            {
+                _queue.Enqueue(new WorkItem(m, label, sub, RecordDataFlowEffects: true));
+            }
         }
     }
 
@@ -178,37 +222,6 @@ internal sealed class UsageWalker
             // descriptors). The callee's own reads are not attributed here (interface throw-stub body).
             _collector.RecordContractUsed(label, pr.Property.Name);
         }
-        else if (pr.Property.ContainingType?.Name == CdacSymbols.TypeInfoTypeName)
-        {
-            // A layout reference on Target.TypeInfo. Resolve which Data type it describes.
-            IReadOnlyCollection<string> dataTypeNames = _correlator.GetTypeInfoDataNames(pr.Instance);
-            if (dataTypeNames.Count == 0)
-                return;
-
-            if (pr.Property.Name == "Fields" && OperationInspector.ExtractFieldsKey(pr) is string keyName)
-            {
-                // GetTypeInfo(DataType.X).Fields["nativeName"] -- a raw-string/constant field-offset lookup.
-                foreach (string dataTypeName in dataTypeNames)
-                {
-                    string dataName = _index.TryGetType(dataTypeName, out DataTypeInfo dataType)
-                        ? DataName(dataType)
-                        : "Data." + dataTypeName;
-                    _collector.RecordField(label, dataName, keyName, UsageKind.OffsetLookup);
-                }
-            }
-
-            else if (pr.Property.Name == "Size")
-            {
-                // GetTypeInfo(DataType.X).Size -- the contract depends on the descriptor's overall size.
-                foreach (string dataTypeName in dataTypeNames)
-                {
-                    string dataName = _index.TryGetType(dataTypeName, out DataTypeInfo dataType)
-                        ? DataName(dataType)
-                        : "Data." + dataTypeName;
-                    _collector.RecordField(label, dataName, "Size", UsageKind.Read);
-                }
-            }
-        }
     }
 
     private void HandleDataProperty(
@@ -232,19 +245,56 @@ internal sealed class UsageWalker
         RecordType(label, dataType);
         foreach (ISymbol member in info.ExpansionMembers)
             _queue.Enqueue(new WorkItem(member, label,
-                new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp)));
+                new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp),
+                RecordDataFlowEffects: true));
     }
 
     private void HandleTypeOf(ITypeOfOperation to, ContractLabel label, Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
     {
-        ITypeSymbol r = Resolve(to.TypeOperand, subst);
+        ITypeSymbol r = GenericDispatch.Resolve(to.TypeOperand, subst);
         if (_index.IsDataType(r))
             RecordType(label, r);
+    }
+
+    private void HandleMethodReference(
+        IMethodReferenceOperation methodReference,
+        ContractLabel label,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> substitutions)
+    {
+        IMethodSymbol method = methodReference.Method;
+        if (_cmp.Equals(
+            method.OriginalDefinition.ContainingAssembly,
+            _compilation.Assembly))
+        {
+            EnqueueMember(
+                method,
+                label,
+                substitutions,
+                recordDataFlowEffects: true);
+        }
     }
 
     // ---- recording helpers -----------------------------------------------------------------
 
     private static string DataName(DataTypeInfo type) => "Data." + type.Name;
+
+    private static string FormatMethod(
+        IMethodSymbol method,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> substitutions)
+    {
+        string display = method.ToDisplayString(
+            SymbolDisplayFormat.CSharpErrorMessageFormat);
+        if (substitutions.Count == 0)
+            return display;
+
+        string binding = string.Join(
+            ", ",
+            substitutions
+                .OrderBy(entry => entry.Key.ToDisplayString(), StringComparer.Ordinal)
+                .Select(entry =>
+                    $"{entry.Key.Name}={entry.Value.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)}"));
+        return $"{display} [{binding}]";
+    }
 
     private void RecordType(ContractLabel label, ITypeSymbol t) =>
         _collector.RecordType(label, _index.TryGetDataType(t, out DataTypeInfo info) ? DataName(info) : "Data." + t.Name);
@@ -263,35 +313,6 @@ internal sealed class UsageWalker
         _collector.RecordField(label, DataName(dataType), field, kind);
 
     // ---- member enumeration & body resolution ----------------------------------------------
-
-    // All walkable members declared on a type and its base chain (as original definitions): methods
-    // and constructors, plus fields/properties (which may carry initializers to walk).
-    private IEnumerable<ISymbol> AllMembers(INamedTypeSymbol t)
-    {
-        INamedTypeSymbol? cur = t;
-        while (cur is not null && _cmp.Equals(cur.ContainingAssembly, _compilation.Assembly))
-        {
-            foreach (ISymbol m in cur.OriginalDefinition.GetMembers())
-            {
-                switch (m)
-                {
-                    case IMethodSymbol method
-                        when method.MethodKind is MethodKind.Ordinary or MethodKind.Constructor
-                            or MethodKind.ExplicitInterfaceImplementation or MethodKind.PropertyGet
-                            or MethodKind.PropertySet:
-                        yield return method;
-                        break;
-                    case IFieldSymbol { IsConst: false, IsImplicitlyDeclared: false } field:
-                        yield return field;
-                        break;
-                    case IPropertySymbol prop:
-                        yield return prop;
-                        break;
-                }
-            }
-            cur = cur.BaseType;
-        }
-    }
 
     // The IOperation(s) to walk for a member: a method body, or a field/property initializer value.
     private IEnumerable<IOperation> GetMemberOperations(ISymbol member)
@@ -334,66 +355,227 @@ internal sealed class UsageWalker
 
     // ---- interprocedural machinery ---------------------------------------------------------
 
-    // Transitive type-parameter resolution through a substitution map.
-    private static ITypeSymbol Resolve(ITypeSymbol t, Dictionary<ITypeParameterSymbol, ITypeSymbol> subst)
-    {
-        int guard = 0;
-        while (t is ITypeParameterSymbol tp && subst.TryGetValue(tp, out ITypeSymbol? mapped) && guard++ < 16)
-            t = mapped;
-        return t;
-    }
-
-    // Substitution for a constructed named type, composing type arguments through an outer
-    // substitution first. Traverses both the base-type chain AND the containing-type chain (so
-    // type parameters of an enclosing generic type, e.g. a nested helper class, are captured).
-    private Dictionary<ITypeParameterSymbol, ITypeSymbol> BuildSubst(
-        INamedTypeSymbol constructed, Dictionary<ITypeParameterSymbol, ITypeSymbol> outer)
-    {
-        Dictionary<ITypeParameterSymbol, ITypeSymbol> d = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp);
-        Stack<INamedTypeSymbol> stack = new Stack<INamedTypeSymbol>();
-        HashSet<INamedTypeSymbol> seen = new HashSet<INamedTypeSymbol>(_cmp);
-        stack.Push(constructed);
-        while (stack.Count > 0)
-        {
-            INamedTypeSymbol cur = stack.Pop();
-            if (!seen.Add(cur))
-                continue;
-            INamedTypeSymbol def = cur.OriginalDefinition;
-            for (int i = 0; i < def.TypeParameters.Length && i < cur.TypeArguments.Length; i++)
-                d[def.TypeParameters[i]] = Resolve(cur.TypeArguments[i], outer);
-            if (cur.BaseType is INamedTypeSymbol bt)
-                stack.Push(bt);
-            if (cur.ContainingType is INamedTypeSymbol ct)
-                stack.Push(ct);
-        }
-        return d;
-    }
-
-    private void EnqueueMember(IMethodSymbol callee, ContractLabel label, Dictionary<ITypeParameterSymbol, ITypeSymbol> outer)
+    private void EnqueueMember(
+        IMethodSymbol callee,
+        ContractLabel label,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> outer,
+        bool recordDataFlowEffects = false)
     {
         IMethodSymbol def = callee.OriginalDefinition;
         Dictionary<ITypeParameterSymbol, ITypeSymbol> sub = new Dictionary<ITypeParameterSymbol, ITypeSymbol>(_cmp);
         if (callee.ContainingType is INamedTypeSymbol ct)
-            foreach (KeyValuePair<ITypeParameterSymbol, ITypeSymbol> kv in BuildSubst(ct, outer))
+            foreach (KeyValuePair<ITypeParameterSymbol, ITypeSymbol> kv in
+                GenericDispatch.BuildSubstitutions(ct, outer, _cmp))
                 sub[kv.Key] = kv.Value;
         for (int i = 0; i < def.TypeParameters.Length && i < callee.TypeArguments.Length; i++)
-            sub[def.TypeParameters[i]] = Resolve(callee.TypeArguments[i], outer);
-        _queue.Enqueue(new WorkItem(def, label, sub));
+            sub[def.TypeParameters[i]] = GenericDispatch.Resolve(
+                callee.TypeArguments[i],
+                outer);
+        _queue.Enqueue(new WorkItem(def, label, sub, recordDataFlowEffects));
     }
 
-    // Concrete method (by name + arity) implementing/overriding `callee` on `implType` or its base
-    // chain. Resolves static-abstract dispatch through a generic type parameter.
-    private IMethodSymbol? FindConcreteMethod(INamedTypeSymbol implType, IMethodSymbol callee)
+    private static bool RequiresDynamicDispatch(IMethodSymbol method) =>
+        !method.IsStatic &&
+        (method.IsAbstract ||
+            method.IsVirtual ||
+            method.ContainingType.TypeKind == TypeKind.Interface);
+
+    private static bool ShouldFollowDynamicDispatch(
+        IMethodSymbol method,
+        ContractLabel label)
     {
-        INamedTypeSymbol? cur = implType;
-        while (cur is not null && _cmp.Equals(cur.OriginalDefinition.ContainingAssembly, _compilation.Assembly))
+        INamedTypeSymbol? containingType = method.ContainingType;
+        if (containingType?.TypeKind != TypeKind.Interface)
+            return true;
+
+        bool isContract = containingType.AllInterfaces.Any(@interface =>
+            @interface.Name == "IContract");
+        return !isContract || containingType.Name == label.Contract;
+    }
+
+    private static bool IsCrossContractInvocation(
+        IMethodSymbol method,
+        ContractLabel label)
+    {
+        INamedTypeSymbol? containingType = method.ContainingType;
+        return containingType?.TypeKind == TypeKind.Interface &&
+            containingType.Name != label.Contract &&
+            containingType.AllInterfaces.Any(@interface =>
+                @interface.Name == "IContract");
+    }
+
+    private void EnqueueEscapingCallbacks(
+        IInvocationOperation invocation,
+        ContractLabel label,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> substitutions)
+    {
+        foreach (IArgumentOperation argument in invocation.Arguments)
         {
-            foreach (IMethodSymbol m in cur.OriginalDefinition.GetMembers(callee.Name).OfType<IMethodSymbol>())
-                if (m.Parameters.Length == callee.Parameters.Length)
-                    return m;
-            cur = cur.BaseType;
+            if (argument.Parameter?.Type is not INamedTypeSymbol
+                {
+                    TypeKind: TypeKind.Interface,
+                } callbackInterface ||
+                callbackInterface.AllInterfaces.Any(@interface =>
+                    @interface.Name == "IContract"))
+            {
+                continue;
+            }
+
+            ITypeSymbol? operandType = OperationInspector.Unwrap(argument.Value).Type;
+            if (operandType is INamedTypeSymbol concreteType &&
+                _cmp.Equals(
+                    concreteType.OriginalDefinition.ContainingAssembly,
+                    _compilation.Assembly))
+            {
+                EnqueueInterfaceMembers(
+                    concreteType,
+                    callbackInterface,
+                    label,
+                    substitutions);
+            }
+
+            if (_constructedTypes.TryGetValue(
+                label,
+                out HashSet<INamedTypeSymbol>? constructedTypes))
+            {
+                foreach (INamedTypeSymbol constructedType in constructedTypes)
+                {
+                    EnqueueInterfaceMembers(
+                        constructedType,
+                        callbackInterface,
+                        label,
+                        substitutions);
+                }
+            }
         }
-        return implType.FindImplementationForInterfaceMember(callee.OriginalDefinition) as IMethodSymbol;
+    }
+
+    private void EnqueueInterfaceMembers(
+        INamedTypeSymbol concreteType,
+        INamedTypeSymbol callbackInterface,
+        ContractLabel label,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> substitutions)
+    {
+        if (!CanDispatchTo(concreteType, callbackInterface))
+            return;
+
+        foreach (IMethodSymbol interfaceMethod in callbackInterface.GetMembers()
+            .OfType<IMethodSymbol>())
+        {
+            IMethodSymbol? implementation =
+                GenericDispatch.FindInterfaceImplementation(
+                    concreteType,
+                    interfaceMethod);
+            if (implementation is not null)
+            {
+                EnqueueMember(
+                    implementation,
+                    label,
+                    substitutions,
+                    recordDataFlowEffects: true);
+            }
+        }
+    }
+
+    private void AddConstructedType(ContractLabel label, INamedTypeSymbol type)
+    {
+        if (!_constructedTypes.TryGetValue(label, out HashSet<INamedTypeSymbol>? types))
+        {
+            _constructedTypes[label] = types =
+                new HashSet<INamedTypeSymbol>(_cmp);
+        }
+        if (!types.Add(type))
+            return;
+
+        if (_pendingDispatches.TryGetValue(label, out List<PendingDispatch>? pending))
+        {
+            foreach (PendingDispatch dispatch in pending)
+                EnqueueDispatchTarget(type, dispatch);
+        }
+    }
+
+    private void AddPendingDispatch(
+        IMethodSymbol method,
+        ContractLabel label,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> substitutions)
+    {
+        PendingDispatch dispatch = new(
+            method,
+            label,
+            new Dictionary<ITypeParameterSymbol, ITypeSymbol>(substitutions, _cmp));
+        if (!_pendingDispatches.TryGetValue(label, out List<PendingDispatch>? pending))
+            _pendingDispatches[label] = pending = [];
+        pending.Add(dispatch);
+
+        if (_constructedTypes.TryGetValue(label, out HashSet<INamedTypeSymbol>? types))
+        {
+            foreach (INamedTypeSymbol type in types)
+                EnqueueDispatchTarget(type, dispatch);
+        }
+    }
+
+    private void EnqueueDispatchTarget(
+        INamedTypeSymbol constructedType,
+        PendingDispatch dispatch)
+    {
+        IMethodSymbol method = dispatch.Method;
+        INamedTypeSymbol? declaringType = method.ContainingType;
+        if (declaringType is null ||
+            !CanDispatchTo(constructedType, declaringType))
+        {
+            return;
+        }
+
+        IMethodSymbol? implementation =
+            declaringType.TypeKind == TypeKind.Interface
+                ? GenericDispatch.FindInterfaceImplementation(
+                    constructedType,
+                    method)
+                : GenericDispatch.FindVirtualImplementation(
+                    constructedType,
+                    method);
+        if (implementation is not null &&
+            _cmp.Equals(
+                implementation.OriginalDefinition.ContainingAssembly,
+                _compilation.Assembly))
+        {
+            EnqueueMember(
+                implementation,
+                dispatch.Label,
+                dispatch.Substitutions,
+                recordDataFlowEffects: true);
+        }
+    }
+
+    private bool CanDispatchTo(
+        INamedTypeSymbol constructedType,
+        INamedTypeSymbol declaringType)
+    {
+        if (_cmp.Equals(
+            constructedType.OriginalDefinition,
+            declaringType.OriginalDefinition))
+        {
+            return true;
+        }
+        if (constructedType.AllInterfaces.Any(@interface =>
+            _cmp.Equals(
+                @interface.OriginalDefinition,
+                declaringType.OriginalDefinition)))
+        {
+            return true;
+        }
+        for (INamedTypeSymbol? current = constructedType.BaseType;
+            current is not null;
+            current = current.BaseType)
+        {
+            if (_cmp.Equals(
+                current.OriginalDefinition,
+                declaringType.OriginalDefinition))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---- nested types ----------------------------------------------------------------------
@@ -401,7 +583,13 @@ internal sealed class UsageWalker
     private sealed record WorkItem(
         ISymbol Member,
         ContractLabel Label,
-        Dictionary<ITypeParameterSymbol, ITypeSymbol> Subst);
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> Subst,
+        bool RecordDataFlowEffects);
+
+    private sealed record PendingDispatch(
+        IMethodSymbol Method,
+        ContractLabel Label,
+        Dictionary<ITypeParameterSymbol, ITypeSymbol> Substitutions);
 
     /// <summary>Depth-first per-body walker; dispatches back to the owning <see cref="UsageWalker"/>.</summary>
     private sealed class BodyWalker(
@@ -435,6 +623,12 @@ internal sealed class UsageWalker
             base.VisitTypeOf(op);
         }
 
+        public override void VisitMethodReference(IMethodReferenceOperation op)
+        {
+            owner.HandleMethodReference(op, label, subst);
+            base.VisitMethodReference(op);
+        }
+
     }
 
     private sealed class WorkItemComparer(SymbolEqualityComparer comparer)
@@ -447,6 +641,7 @@ internal sealed class UsageWalker
             if (x is null || y is null ||
                 !comparer.Equals(x.Member, y.Member) ||
                 x.Label != y.Label ||
+                x.RecordDataFlowEffects != y.RecordDataFlowEffects ||
                 x.Subst.Count != y.Subst.Count)
                 return false;
 
@@ -470,7 +665,10 @@ internal sealed class UsageWalker
                     comparer.GetHashCode(entry.Value));
             }
             return HashCode.Combine(
-                comparer.GetHashCode(item.Member), item.Label, substitutionsHash);
+                comparer.GetHashCode(item.Member),
+                item.Label,
+                substitutionsHash,
+                item.RecordDataFlowEffects);
         }
     }
 }

@@ -19,8 +19,10 @@ internal static class OperationInspector
     }
 
     /// <summary>
-    /// If <paramref name="expr"/> is a <c>GetTypeInfo(DataType.X)</c> / <c>GetTypeInfo("X")</c>
-    /// call, returns the DataType name.
+    /// If <paramref name="expr"/> is a <c>GetTypeInfo</c> call with a string name or enum
+    /// member argument, returns the corresponding cDAC type name. The product enum overload
+    /// forwards through <c>ToName()</c> to the string overload; Roslyn sees the source overload
+    /// call before that body is inlined.
     /// </summary>
     public static string? InlineGetTypeInfoName(IOperation? expr)
     {
@@ -32,7 +34,9 @@ internal static class OperationInspector
         foreach (IArgumentOperation arg in inv.Arguments)
         {
             IOperation v = Unwrap(arg.Value);
-            if (v is IFieldReferenceOperation f && f.Field.ContainingType?.Name == CdacSymbols.DataTypeEnumName)
+            if (arg.Parameter?.Type.TypeKind == TypeKind.Enum &&
+                v is IFieldReferenceOperation f &&
+                f.Field.ContainingType?.TypeKind == TypeKind.Enum)
                 return f.Field.Name;
             if (v.ConstantValue is { HasValue: true, Value: string s })
                 return s;
@@ -50,27 +54,6 @@ internal static class OperationInspector
     };
 
     /// <summary>
-    /// Given a <c>.Fields</c> property reference, extracts the constant string key from an
-    /// indexer (<c>Fields["x"]</c>) or a <c>ContainsKey</c>/<c>TryGetValue(..)</c> call.
-    /// </summary>
-    public static string? ExtractFieldsKey(IOperation fieldsRef)
-    {
-        IOperation? keyOp = fieldsRef.Parent switch
-        {
-            IPropertyReferenceOperation idx when idx.Property.IsIndexer && idx.Arguments.Length >= 1
-                => idx.Arguments[0].Value,
-            IInvocationOperation call when call.Arguments.Length >= 1
-                && call.TargetMethod.Name is "ContainsKey" or "TryGetValue"
-                => call.Arguments[0].Value,
-            _ => null,
-        };
-        if (keyOp is null)
-            return null;
-        keyOp = Unwrap(keyOp);
-        return keyOp.ConstantValue is { HasValue: true, Value: string s } ? s : null;
-    }
-
-    /// <summary>
     /// Classifies a Data-property reference: <c>nameof(..)</c> is an offset lookup, an assignment
     /// target is a write, an increment/compound assignment is a read-write, else a read.
     /// </summary>
@@ -85,7 +68,11 @@ internal static class OperationInspector
         }
         if (pr.Parent is ISimpleAssignmentOperation sa && ReferenceEquals(sa.Target, pr))
             return UsageKind.Write;
-        if (pr.Parent is ICompoundAssignmentOperation or IIncrementOrDecrementOperation)
+        if (pr.Parent is ICompoundAssignmentOperation compoundAssignment &&
+            ReferenceEquals(compoundAssignment.Target, pr))
+            return UsageKind.ReadWrite;
+        if (pr.Parent is IIncrementOrDecrementOperation increment &&
+            ReferenceEquals(increment.Target, pr))
             return UsageKind.ReadWrite;
         return UsageKind.Read;
     }

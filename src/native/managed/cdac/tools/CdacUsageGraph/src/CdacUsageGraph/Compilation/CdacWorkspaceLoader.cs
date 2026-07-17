@@ -14,7 +14,7 @@ namespace CdacUsageGraph.Compilation;
 /// </summary>
 internal static class CdacWorkspaceLoader
 {
-    public static CSharpCompilation Load(string cdacRoot)
+    public static CdacAnalysisWorkspace Load(string cdacRoot)
     {
         string projectPath = Path.Combine(
             cdacRoot,
@@ -35,9 +35,8 @@ internal static class CdacWorkspaceLoader
                 failures.Add(e.Diagnostic);
         });
 
-        Project project = workspace.OpenProjectAsync(projectPath).GetAwaiter().GetResult();
-        Microsoft.CodeAnalysis.Compilation? result =
-            project.GetCompilationAsync().GetAwaiter().GetResult();
+        Project contractsProject = workspace.OpenProjectAsync(projectPath).GetAwaiter().GetResult();
+        Solution solution = contractsProject.Solution;
 
         if (failures.Count > 0)
         {
@@ -46,20 +45,42 @@ internal static class CdacWorkspaceLoader
                 Environment.NewLine +
                 string.Join(Environment.NewLine, failures.Select(d => "  " + d.Message)));
         }
-        if (result is not CSharpCompilation compilation)
-            throw new InvalidOperationException("MSBuildWorkspace did not produce a C# compilation for cDAC Contracts.");
-
-        List<Diagnostic> errors = compilation.GetDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error)
-            .ToList();
-        if (errors.Count > 0)
+        CSharpCompilation contracts = GetCompilation(contractsProject);
+        List<CSharpCompilation> analyzableCompilations = [contracts];
+        foreach (ProjectReference projectReference in contractsProject.ProjectReferences)
         {
-            throw new InvalidOperationException(
-                "The MSBuild-backed cDAC Contracts compilation has errors:" +
-                Environment.NewLine +
-                string.Join(Environment.NewLine, errors.Take(20).Select(d => $"  {d.Id}: {d.GetMessage()}")));
+            Project? referencedProject = solution.GetProject(projectReference.ProjectId);
+            if (referencedProject?.Name == CdacSymbols.AbstractionsProjectName)
+                analyzableCompilations.Add(GetCompilation(referencedProject));
         }
 
-        return compilation;
+        if (analyzableCompilations.Count != 2)
+            throw new InvalidOperationException(
+                $"Expected Contracts and Abstractions compilations, found {analyzableCompilations.Count}.");
+
+        return new CdacAnalysisWorkspace(contracts, analyzableCompilations);
+
+        static CSharpCompilation GetCompilation(Project project)
+        {
+            Microsoft.CodeAnalysis.Compilation? result =
+                project.GetCompilationAsync().GetAwaiter().GetResult();
+            if (result is not CSharpCompilation compilation)
+                throw new InvalidOperationException(
+                    $"MSBuildWorkspace did not produce a C# compilation for '{project.Name}'.");
+
+            List<Diagnostic> errors = compilation.GetDiagnostics()
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .ToList();
+            if (errors.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"The MSBuild-backed '{project.Name}' compilation has errors:" +
+                    Environment.NewLine +
+                    string.Join(Environment.NewLine, errors.Take(20).Select(
+                        diagnostic => $"  {diagnostic.Id}: {diagnostic.GetMessage()}")));
+            }
+
+            return compilation;
+        }
     }
 }

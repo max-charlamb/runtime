@@ -99,3 +99,38 @@ internal sealed class ContractsUsedMarkdownWriter : IReportWriter
         return $"contract-contracts-used.md ({graph.ContractsUsed.Sum(x => x.Value.Count)} contract/contract edges)";
     }
 }
+
+/// <summary>Emits <c>contract-methods-reachable.md</c>: reachable method contexts per contract.</summary>
+internal sealed class ReachableMethodsMarkdownWriter : IReportWriter
+{
+    public string Write(UsageGraph graph, string outputDirectory)
+    {
+        StringBuilder sb = new();
+        sb.AppendLine("# cDAC Contract/Version -> Reachable Methods");
+        sb.AppendLine();
+        sb.AppendLine("| Contract | Version | Method |");
+        sb.AppendLine("|---|---|---|");
+        foreach ((string contract, string version, string _) in graph.Registrations
+            .GroupBy(registration => (registration.Contract, registration.Version))
+            .Select(group => group.First())
+            .OrderBy(registration => registration.Contract)
+            .ThenBy(registration => registration.Version))
+        {
+            ContractLabel label = new(contract, version);
+            graph.ReachableMethods.TryGetValue(
+                label,
+                out IReadOnlyCollection<string>? methods);
+            foreach (string method in (methods ?? []).OrderBy(
+                method => method,
+                StringComparer.Ordinal))
+            {
+                sb.AppendLine($"| {contract} | {version} | `{method}` |");
+            }
+        }
+
+        File.WriteAllText(
+            Path.Combine(outputDirectory, "contract-methods-reachable.md"),
+            sb.ToString());
+        return $"contract-methods-reachable.md ({graph.ReachableMethods.Sum(entry => entry.Value.Count)} contract/method contexts)";
+    }
+}

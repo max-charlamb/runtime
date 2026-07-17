@@ -2,7 +2,10 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json;
+using CdacUsageGraph.Analysis.DataFlow;
+using CdacUsageGraph.Analysis;
 using CdacUsageGraph.Compilation;
+using CdacUsageGraph.Discovery;
 using CdacUsageGraph.Model;
 using CdacUsageGraph.Reporting;
 using Microsoft.CodeAnalysis;
@@ -32,12 +35,29 @@ public sealed class UsageWalkerIntegrationTests
     }
 
     [Fact]
+    public void DefaultOutputDirectoryIsIgnoredToolOutput()
+    {
+        DirectoryInfo? root = Locator.FindCdacRoot();
+        if (root is null) return; // cDAC source not found (running outside the repo)
+
+        string expected = Path.Combine(
+            root.FullName,
+            "tools",
+            "CdacUsageGraph",
+            "output");
+        Assert.Equal(
+            Path.GetFullPath(expected),
+            Locator.DefaultOutputDirectory().FullName);
+    }
+
+    [Fact]
     public void MSBuildWorkspaceLoadsGeneratedContractsCompilation()
     {
         DirectoryInfo? root = Locator.FindCdacRoot();
         if (root is null) return; // cDAC source not found (running outside the repo)
 
-        CSharpCompilation compilation = CdacWorkspaceLoader.Load(root.FullName);
+        CdacAnalysisWorkspace workspace = CdacWorkspaceLoader.Load(root.FullName);
+        CSharpCompilation compilation = workspace.Contracts;
         INamedTypeSymbol jitNotification = compilation.GetTypeByMetadataName(
             "Microsoft.Diagnostics.DataContractReader.Data.JITNotification")!;
 
@@ -47,6 +67,90 @@ public sealed class UsageWalkerIntegrationTests
         Assert.Contains(jitNotification.InstanceConstructors, c => c.Parameters.Length == 2);
         Assert.Contains(compilation.SyntaxTrees, tree =>
             tree.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MSBuildWorkspaceRetainsAbstractionsSourceForDfa()
+    {
+        DirectoryInfo? root = Locator.FindCdacRoot();
+        if (root is null) return; // cDAC source not found (running outside the repo)
+
+        CdacAnalysisWorkspace workspace = CdacWorkspaceLoader.Load(root.FullName);
+        CSharpCompilation abstractions = workspace.AnalyzableCompilations.Single(
+            compilation => compilation.AssemblyName == CdacSymbols.AbstractionsProjectName);
+        INamedTypeSymbol targetFieldExtensions = abstractions.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.TargetFieldExtensions")!;
+        IMethodSymbol readPointerField = targetFieldExtensions.GetMembers("ReadPointerField")
+            .OfType<IMethodSymbol>()
+            .Single();
+        SyntaxReference syntaxReference = Assert.Single(readPointerField.DeclaringSyntaxReferences);
+
+        Assert.True(workspace.IsAnalyzable(readPointerField));
+        Assert.True(workspace.TryGetSemanticModel(syntaxReference.SyntaxTree, out SemanticModel model));
+        Assert.NotNull(model.GetOperation(syntaxReference.GetSyntax()));
+        Assert.False(workspace.IsAnalyzable(
+            abstractions.GetSpecialType(SpecialType.System_String)));
+    }
+
+    [Theory]
+    [InlineData("ReadPointerField", "Read")]
+    [InlineData("ReadDataField", "Read")]
+    [InlineData("WritePointerField", "Write")]
+    public void TypeInfoDfaDerivesTargetFieldExtensionEffectsFromCfg(
+        string methodName,
+        string expectedUsageName)
+    {
+        DirectoryInfo? root = Locator.FindCdacRoot();
+        if (root is null) return; // cDAC source not found (running outside the repo)
+
+        CdacAnalysisWorkspace workspace = CdacWorkspaceLoader.Load(root.FullName);
+        CSharpCompilation abstractions = workspace.AnalyzableCompilations.Single(
+            compilation => compilation.AssemblyName == CdacSymbols.AbstractionsProjectName);
+        INamedTypeSymbol extensions = abstractions.GetTypeByMetadataName(
+            "Microsoft.Diagnostics.DataContractReader.TargetFieldExtensions")!;
+        IMethodSymbol method = extensions.GetMembers(methodName).OfType<IMethodSymbol>().Single();
+        SyntaxReference syntaxReference = Assert.Single(method.DeclaringSyntaxReferences);
+        Assert.True(workspace.TryGetSemanticModel(syntaxReference.SyntaxTree, out SemanticModel model));
+        IOperation rootOperation = model.GetOperation(syntaxReference.GetSyntax())!;
+        IParameterSymbol typeInfoParameter = method.Parameters.Single(
+            parameter => parameter.Name == "typeInfo");
+        IParameterSymbol fieldNameParameter = method.Parameters.Single(
+            parameter => parameter.Name == "fieldName");
+        Dictionary<IParameterSymbol, ProvenanceValue> entryValues =
+            new(SymbolEqualityComparer.Default)
+            {
+                [typeInfoParameter] = ProvenanceValue.FromTypeInfo(TypeInfoValue.Known("Widget")),
+                [fieldNameParameter] = ProvenanceValue.FromString(StringValue.Known("Value")),
+            };
+
+        TypeInfoFlowResult result = new TypeInfoDataFlowAnalysis(
+            CdacApiSymbols.Build(workspace)).Analyze(rootOperation, entryValues);
+        UsageKind expectedUsage = Enum.Parse<UsageKind>(expectedUsageName);
+
+        Assert.Contains(
+            new FieldAccessEffect(new FieldIdentity("Widget", "Value"), expectedUsage),
+            result.Effects);
+    }
+
+    [Theory]
+    [InlineData("IExecutionManager", "c1", "Data.R2RExceptionClause", "Size", "Read")]
+    [InlineData("IExecutionManager", "c1", "Data.UnwindInfo", "FunctionLength", "OffsetLookup")]
+    [InlineData("IPrecodeStubs", "c1", "Data.PrecodeMachineDescriptor", "OffsetOfPrecodeType", "OffsetLookup")]
+    [InlineData("IStackWalk", "c1", "Data.ReadyToRunInfo", "ImportSections", "OffsetLookup")]
+    [InlineData("IThread", "c1", "Data.Thread", "ThreadHandle", "Read")]
+    public void DataFlowEffectsAreIntegratedIntoUsageGraph(
+        string contract,
+        string version,
+        string dataType,
+        string field,
+        string usageName)
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+
+        IReadOnlyCollection<UsageKind> usages =
+            built.Value.Graph.FieldUsage[(new ContractLabel(contract, version), dataType)][field];
+        Assert.Contains(Enum.Parse<UsageKind>(usageName), usages);
     }
 
     [Fact]
@@ -91,6 +195,53 @@ public sealed class UsageWalkerIntegrationTests
         // PrecodeStubs c3 reaches Data types only via a generic base + static-abstract dispatch.
         HashSet<string> precodeTypes = DataTypesUsed(graph, new ContractLabel("IPrecodeStubs", "c3"));
         Assert.Contains("Data.InterpMethod", precodeTypes);
+    }
+
+    [Theory]
+    [InlineData("c1", false)]
+    [InlineData("c2", false)]
+    [InlineData("c3", true)]
+    public void ReportsInterpreterPrecodeUsageOnlyForSupportingVersion(
+        string version,
+        bool expected)
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+
+        HashSet<string> dataTypes = DataTypesUsed(
+            built.Value.Graph,
+            new ContractLabel("IPrecodeStubs", version));
+        Assert.Equal(expected, dataTypes.Contains("Data.InterpreterPrecodeData"));
+    }
+
+    [Theory]
+    [InlineData("c1", false)]
+    [InlineData("c2", false)]
+    [InlineData("c3", true)]
+    public void ResolvesVersionSpecificInterpreterMethod(
+        string version,
+        bool expected)
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+
+        IReadOnlyCollection<string> methods = built.Value.Graph.ReachableMethods[
+            new ContractLabel("IPrecodeStubs", version)];
+        bool reachesVersion3Override = methods.Any(method => method.Contains(
+            "PrecodeStubs_3.GetInterpreterCodeFromInterpreterPrecodeIfPresent",
+            StringComparison.Ordinal));
+        bool reachesBaseNoOp = methods.Any(method =>
+            method.Contains(
+                "PrecodeStubsCommon",
+                StringComparison.Ordinal) &&
+            method.Contains(
+                "GetInterpreterCodeFromInterpreterPrecodeIfPresent",
+                StringComparison.Ordinal));
+
+        Assert.Equal(expected, reachesVersion3Override);
+        Assert.Equal(
+            !expected,
+            reachesBaseNoOp);
     }
 
     [Fact]
@@ -158,6 +309,50 @@ public sealed class UsageWalkerIntegrationTests
             out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? threadFields));
         Assert.Contains("ThreadHandle", threadFields!.Keys);
         Assert.Contains("RuntimeThreadLocals", threadFields!.Keys);
+
+        // ObjectHandle.Handle/Object are parsed from raw target pointers, not named descriptor
+        // fields, so reading the convenience properties must not invent descriptor rows.
+        if (graph.FieldUsage.TryGetValue(
+            (new ContractLabel("IThread", "c1"), "Data.ObjectHandle"),
+            out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? objectHandleFields))
+        {
+            Assert.DoesNotContain("Handle", objectHandleFields.Keys);
+            Assert.DoesNotContain("Object", objectHandleFields.Keys);
+        }
+    }
+
+    [Theory]
+    [InlineData("IExecutionManager", "c1")]
+    [InlineData("IExecutionManager", "c2")]
+    [InlineData("IStackWalk", "c1")]
+    public void OnInitDependenciesDoNotRequireNullabilityAttributes(string contract, string version)
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+        UsageGraph graph = built.Value.Graph;
+
+        Assert.True(graph.FieldUsage.TryGetValue(
+            (new ContractLabel(contract, version), "Data.ReadyToRunInfo"),
+            out IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>? fields));
+        Assert.Contains(UsageKind.Read, fields!["CompositeInfo"]);
+    }
+
+    [Theory]
+    [InlineData("ILoader", "c1", "Data.ModuleLookupMap", "Count")]
+    [InlineData("IStackWalk", "c1", "Data.VASigCookie", "SizeOfArgs")]
+    public void CompoundAssignmentOperandsAreReadOnly(
+        string contract,
+        string version,
+        string dataType,
+        string field)
+    {
+        (UsageGraph Graph, string Root)? built = BuildRealGraph();
+        if (built is null) return; // cDAC source not found (running outside the repo)
+        UsageGraph graph = built.Value.Graph;
+
+        Assert.Equal(
+            [UsageKind.Read],
+            graph.FieldUsage[(new ContractLabel(contract, version), dataType)][field]);
     }
 
     [Theory]
@@ -243,6 +438,7 @@ public sealed class UsageWalkerIntegrationTests
                 e.GetProperty("version").GetString() == "c1");
 
             Assert.True(gcInfo.GetProperty("impls").GetArrayLength() > 1);
+            Assert.True(gcInfo.GetProperty("reachableMethods").GetArrayLength() > 0);
             Assert.False(gcInfo.TryGetProperty("impl", out _));
         }
         finally

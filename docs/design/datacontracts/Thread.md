@@ -120,8 +120,6 @@ The contract additionally depends on these data descriptors
 | `InFlightTLSData` | `Next` | Pointer to next in-flight TLS data entry |
 | `InFlightTLSData` | `TLSData` | Object handle to the TLS data for the static field |
 | `InFlightTLSData` | `TlsIndex` | TLS index for the in-flight static field |
-| `ObjectHandle` | `Handle` | Address of the object handle |
-| `ObjectHandle` | `Object` | Pointer to the managed object |
 | `RuntimeThreadLocals` | `AllocContext` | GC allocation context for the thread |
 | `Thread` | `CachedStackBase` | Pointer to the base of the stack |
 | `Thread` | `CachedStackLimit` | Pointer to the limit of the stack |

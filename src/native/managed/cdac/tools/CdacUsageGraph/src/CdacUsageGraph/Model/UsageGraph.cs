@@ -17,4 +17,22 @@ internal sealed record UsageGraph(
     int DataTypeCount,
     IReadOnlyList<RegistrationInfo> Registrations,
     IReadOnlyDictionary<(ContractLabel Label, string DataType), IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>> FieldUsage,
-    IReadOnlyDictionary<ContractLabel, IReadOnlyCollection<string>> ContractsUsed);
+    IReadOnlyDictionary<ContractLabel, IReadOnlyCollection<string>> ContractsUsed,
+    IReadOnlyDictionary<ContractLabel, IReadOnlyCollection<string>> ReachableMethods)
+{
+    public UsageGraph(
+        string cdacRoot,
+        int dataTypeCount,
+        IReadOnlyList<RegistrationInfo> registrations,
+        IReadOnlyDictionary<(ContractLabel Label, string DataType), IReadOnlyDictionary<string, IReadOnlyCollection<UsageKind>>> fieldUsage,
+        IReadOnlyDictionary<ContractLabel, IReadOnlyCollection<string>> contractsUsed)
+        : this(
+            cdacRoot,
+            dataTypeCount,
+            registrations,
+            fieldUsage,
+            contractsUsed,
+            new Dictionary<ContractLabel, IReadOnlyCollection<string>>())
+    {
+    }
+}

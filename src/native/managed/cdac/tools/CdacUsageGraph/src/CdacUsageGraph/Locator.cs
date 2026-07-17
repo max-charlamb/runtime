@@ -27,11 +27,17 @@ internal static class Locator
     /// <summary>The default output directory: the tool root's <c>output/</c>, else <c>./output</c>.</summary>
     public static DirectoryInfo DefaultOutputDirectory(string? start = null)
     {
-        for (DirectoryInfo? d = new DirectoryInfo(start ?? AppContext.BaseDirectory); d is not null; d = d.Parent)
+        DirectoryInfo? cdacRoot = FindCdacRoot(start);
+        if (cdacRoot is not null)
         {
-            if (d.Name == "CdacUsageGraph" && File.Exists(Path.Combine(d.FullName, "generate-docs.ps1")))
-                return new DirectoryInfo(Path.Combine(d.FullName, "output"));
+            string toolRoot = Path.Combine(
+                cdacRoot.FullName,
+                "tools",
+                "CdacUsageGraph");
+            if (File.Exists(Path.Combine(toolRoot, "generate-docs.ps1")))
+                return new DirectoryInfo(Path.Combine(toolRoot, "output"));
         }
+
         return new DirectoryInfo(Path.Combine(Directory.GetCurrentDirectory(), "output"));
     }
 
