@@ -184,6 +184,37 @@ CrashInfo::InitializeOtherMappings()
 {
     uint64_t cbOtherMappings = 0;
 
+    if (m_appModel == AppModelType::NativeAOT && m_sharedCacheEndAddress > m_sharedCacheStartAddress)
+    {
+        std::set<MemoryRegion> filteredMemoryRegions;
+        for (const MemoryRegion& region : m_allMemoryRegions)
+        {
+            if (region.EndAddress() <= m_sharedCacheStartAddress || region.StartAddress() >= m_sharedCacheEndAddress)
+            {
+                filteredMemoryRegions.insert(region);
+                continue;
+            }
+
+            if (region.StartAddress() < m_sharedCacheStartAddress)
+            {
+                filteredMemoryRegions.emplace(
+                    region.Flags(),
+                    region.StartAddress(),
+                    m_sharedCacheStartAddress,
+                    region.Offset());
+            }
+            if (region.EndAddress() > m_sharedCacheEndAddress)
+            {
+                filteredMemoryRegions.emplace(
+                    region.Flags(),
+                    m_sharedCacheEndAddress,
+                    region.EndAddress(),
+                    region.Offset() + (m_sharedCacheEndAddress - region.StartAddress()));
+            }
+        }
+        m_allMemoryRegions.swap(filteredMemoryRegions);
+    }
+
     // Filter out the module regions from the memory regions gathered. The m_moduleMappings list needs
     // to include all the native and managed module regions.
     for (const MemoryRegion& region : m_allMemoryRegions)
@@ -296,10 +327,14 @@ void CrashInfo::VisitModule(MachOModule& module)
 
 void CrashInfo::VisitSegment(MachOModule& module, const segment_command_64& segment)
 {
-    // These module segments are already omitted from m_allMemoryRegions above.
-    // Do not reintroduce them through the full-dump module mapping list.
-    if (m_appModel == AppModelType::NativeAOT && (module.Header().flags & MH_DYLIB_IN_CACHE) != 0)
+    if (m_appModel == AppModelType::NativeAOT &&
+        (module.Header().flags & MH_DYLIB_IN_CACHE) != 0 &&
+        segment.initprot != 0)
     {
+        uint64_t start = (segment.vmaddr + module.LoadBias()) & PAGE_MASK;
+        uint64_t end = (segment.vmaddr + module.LoadBias() + segment.vmsize + (PAGE_SIZE - 1)) & PAGE_MASK;
+        m_sharedCacheStartAddress = std::min(m_sharedCacheStartAddress, start);
+        m_sharedCacheEndAddress = std::max(m_sharedCacheEndAddress, end);
         return;
     }
 

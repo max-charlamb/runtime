@@ -36,6 +36,8 @@ CrashInfo::CrashInfo(const CreateDumpOptions& options) :
     memset(m_runtimeUuid, 0, sizeof(m_runtimeUuid));
     m_runtimeLoadBias = 0;
     m_runtimeUuidValid = false;
+    m_sharedCacheStartAddress = UINT64_MAX;
+    m_sharedCacheEndAddress = 0;
 #else
     m_auxvValues.fill(0);
     m_fdMem = -1;

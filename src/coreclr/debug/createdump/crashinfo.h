@@ -66,6 +66,8 @@ private:
     uint8_t m_runtimeUuid[16];                      // Mach-O UUID for the NativeAOT runtime module
     uint64_t m_runtimeLoadBias;                     // ASLR slide for the NativeAOT runtime module
     bool m_runtimeUuidValid;
+    uint64_t m_sharedCacheStartAddress;
+    uint64_t m_sharedCacheEndAddress;
 #else
     bool m_canUseProcVmReadSyscall;
     int m_fdMem;                                    // /proc/<pid>/mem handle
