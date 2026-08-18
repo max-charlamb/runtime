@@ -18,6 +18,8 @@ DumpWriter::WriteDump()
 
     BuildProcessMetadataNote();
 
+    BuildMainBinaryNote();
+
     uint64_t fileOffset = 0;
     if (!WriteHeader(&fileOffset)) {
         return false;
@@ -25,6 +27,11 @@ DumpWriter::WriteDump()
 
     m_processMetadataNote.offset = fileOffset;
     fileOffset += m_processMetadataNote.size;
+    if (m_hasMainBinarySpecification)
+    {
+        m_mainBinaryNote.offset = fileOffset;
+        fileOffset += m_mainBinaryNote.size;
+    }
 
     TRACE("Writing %zd thread commands to core file\n", m_threadLoadCommands.size());
 
@@ -59,11 +66,20 @@ DumpWriter::WriteDump()
         }
     }
 
-    // Write the process metadata note as the final load command
+    // Write the metadata notes as the final load commands
     if (!WriteData(&m_processMetadataNote, m_processMetadataNote.cmdsize)) {
         return false;
     }
+    if (m_hasMainBinarySpecification &&
+        !WriteData(&m_mainBinaryNote, m_mainBinaryNote.cmdsize)) {
+        return false;
+    }
+
     if (!WriteData(m_processMetadata.data(), m_processMetadata.size())) {
+        return false;
+    }
+    if (m_hasMainBinarySpecification &&
+        !WriteData(&m_mainBinarySpecification, sizeof(m_mainBinarySpecification))) {
         return false;
     }
 
@@ -125,6 +141,39 @@ DumpWriter::BuildProcessMetadataNote()
     static_assert(sizeof(m_processMetadataNote.data_owner) == sizeof("process metadata") - 1);
     memcpy(m_processMetadataNote.data_owner, "process metadata", sizeof(m_processMetadataNote.data_owner));
     m_processMetadataNote.size = m_processMetadata.size();
+}
+
+void
+DumpWriter::BuildMainBinaryNote()
+{
+    m_hasMainBinarySpecification =
+        m_crashInfo.AppModel() == AppModelType::NativeAOT &&
+        m_crashInfo.RuntimeUuidValid();
+    if (!m_hasMainBinarySpecification)
+    {
+        return;
+    }
+
+    static_assert(sizeof(MainBinarySpecification) == 48);
+
+    m_mainBinaryNote.cmd = LC_NOTE;
+    m_mainBinaryNote.cmdsize = sizeof(note_command);
+    memcpy(m_mainBinaryNote.data_owner, "main bin spec", sizeof("main bin spec") - 1);
+    m_mainBinaryNote.size = sizeof(m_mainBinarySpecification);
+
+    m_mainBinarySpecification.version = 2;
+    m_mainBinarySpecification.type = 3;
+    m_mainBinarySpecification.address = UINT64_MAX;
+    m_mainBinarySpecification.slide = m_crashInfo.RuntimeLoadBias();
+    memcpy(m_mainBinarySpecification.uuid, m_crashInfo.RuntimeUuid(), sizeof(m_mainBinarySpecification.uuid));
+
+    uint32_t pageSize = PAGE_SIZE;
+    while (pageSize > 1)
+    {
+        m_mainBinarySpecification.log2PageSize++;
+        pageSize >>= 1;
+    }
+    m_mainBinarySpecification.platform = PLATFORM_MACOS;
 }
 
 void
@@ -232,6 +281,11 @@ DumpWriter::WriteHeader(uint64_t* pFileOffset)
 
     header.ncmds++;
     header.sizeofcmds += m_processMetadataNote.cmdsize;
+    if (m_hasMainBinarySpecification)
+    {
+        header.ncmds++;
+        header.sizeofcmds += m_mainBinaryNote.cmdsize;
+    }
 
     *pFileOffset = sizeof(mach_header_64) + header.sizeofcmds;
     

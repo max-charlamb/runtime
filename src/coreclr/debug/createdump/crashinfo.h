@@ -63,6 +63,9 @@ private:
 #ifdef __APPLE__
     vm_map_t m_task;                                // the mach task for the process
     std::set<MemoryRegion> m_allMemoryRegions;      // all memory regions on MacOS
+    uint8_t m_runtimeUuid[16];                      // Mach-O UUID for the NativeAOT runtime module
+    uint64_t m_runtimeLoadBias;                     // ASLR slide for the NativeAOT runtime module
+    bool m_runtimeUuidValid;
 #else
     bool m_canUseProcVmReadSyscall;
     int m_fdMem;                                    // /proc/<pid>/mem handle
@@ -113,7 +116,11 @@ public:
     inline pid_t Tgid() const { return m_tgid; }
 #ifdef __APPLE__
     inline vm_map_t Task() const { return m_task; }
+    inline const uint8_t* RuntimeUuid() const { return m_runtimeUuid; }
+    inline uint64_t RuntimeLoadBias() const { return m_runtimeLoadBias; }
+    inline bool RuntimeUuidValid() const { return m_runtimeUuidValid; }
 #endif
+    inline AppModelType AppModel() const { return m_appModel; }
     inline const bool GatherFrames() const { return m_gatherFrames; }
     inline const pid_t CrashThread() const { return m_crashThread; }
     inline const uint32_t Signal() const { return m_signal; }

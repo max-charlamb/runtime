@@ -33,6 +33,9 @@ CrashInfo::CrashInfo(const CreateDumpOptions& options) :
     m_runtimeBaseAddress = 0;
 #ifdef __APPLE__
     m_task = 0;
+    memset(m_runtimeUuid, 0, sizeof(m_runtimeUuid));
+    m_runtimeLoadBias = 0;
+    m_runtimeUuidValid = false;
 #else
     m_auxvValues.fill(0);
     m_fdMem = -1;

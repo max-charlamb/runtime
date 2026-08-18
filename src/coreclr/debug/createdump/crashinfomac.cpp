@@ -270,6 +270,11 @@ void CrashInfo::VisitModule(MachOModule& module)
             {
                 m_coreclrPath = GetDirectory(module.Name());
                 m_runtimeBaseAddress = module.BaseAddress();
+                m_runtimeUuidValid = module.GetBinaryInfo(m_runtimeUuid, &m_runtimeLoadBias);
+                if (!m_runtimeUuidValid)
+                {
+                    TRACE("NativeAOT runtime module does not contain an LC_UUID\n");
+                }
                 TRACE("Found valid NativeAOT runtime module\n");
             }
         }

@@ -20,6 +20,17 @@ struct ThreadCommand
 #endif
 };
 
+struct MainBinarySpecification
+{
+    uint32_t version;
+    uint32_t type;
+    uint64_t address;
+    uint64_t slide;
+    uint8_t uuid[16];
+    uint32_t log2PageSize;
+    uint32_t platform;
+};
+
 class DumpWriter
 {
 private:
@@ -30,6 +41,9 @@ private:
     std::vector<ThreadCommand> m_threadLoadCommands;
     note_command m_processMetadataNote{};
     std::string m_processMetadata;
+    note_command m_mainBinaryNote{};
+    MainBinarySpecification m_mainBinarySpecification{};
+    bool m_hasMainBinarySpecification{};
     BYTE m_tempBuffer[0x4000];
 
     // no public copy constructor
@@ -46,6 +60,7 @@ public:
 private:
     bool WriteDiagInfo(size_t size);
     void BuildProcessMetadataNote();
+    void BuildMainBinaryNote();
     void BuildSegmentLoadCommands();
     void BuildThreadLoadCommands();
     bool WriteHeader(uint64_t* pFileOffset);

@@ -82,8 +82,10 @@ MachOModule::MachOModule(MachOReader& reader, mach_vm_address_t baseAddress, std
     m_commands(nullptr),
     m_symtabCommand(nullptr),
     m_nlists(nullptr),
-    m_strtabAddress(0)
+    m_strtabAddress(0),
+    m_uuidValid(false)
 {
+    memset(m_uuid, 0, sizeof(m_uuid));
     if (name != nullptr) {
         m_name = *name;
     }
@@ -188,6 +190,22 @@ MachOModule::EnumerateSegments()
 }
 
 bool
+MachOModule::GetBinaryInfo(uint8_t uuid[16], uint64_t* loadBias)
+{
+    _ASSERTE(uuid != nullptr);
+    _ASSERTE(loadBias != nullptr);
+
+    if (!ReadLoadCommands() || !m_uuidValid)
+    {
+        return false;
+    }
+
+    memcpy(uuid, m_uuid, sizeof(m_uuid));
+    *loadBias = m_loadBias;
+    return true;
+}
+
+bool
 MachOModule::ReadLoadCommands()
 {
     if (m_commands == nullptr)
@@ -219,6 +237,11 @@ MachOModule::ReadLoadCommands()
 
             case LC_DYSYMTAB:
                 m_dysymtabCommand = (dysymtab_command*)command;
+                break;
+
+            case LC_UUID:
+                memcpy(m_uuid, ((uuid_command*)command)->uuid, sizeof(m_uuid));
+                m_uuidValid = true;
                 break;
 
             case LC_SEGMENT_64:

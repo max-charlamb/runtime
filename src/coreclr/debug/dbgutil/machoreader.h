@@ -25,6 +25,8 @@ private:
     dysymtab_command* m_dysymtabCommand;
     nlist_64* m_nlists;
     uint64_t m_strtabAddress;
+    uint8_t m_uuid[16];
+    bool m_uuidValid;
 
 public:
     MachOModule(MachOReader& reader, mach_vm_address_t baseAddress, std::string* name = nullptr);
@@ -39,6 +41,7 @@ public:
     bool TryLookupSymbol(const char* symbolName, uint64_t* symbolValue);
     bool TryLookupSymbol(int start, int nsyms, const char* symbolName, uint64_t* symbolValue);
     bool EnumerateSegments();
+    bool GetBinaryInfo(uint8_t uuid[16], uint64_t* loadBias);
 
 private:
     bool ReadLoadCommands();
