@@ -106,6 +106,7 @@ CrashInfo::EnumerateMemoryRegions()
     mach_vm_address_t address = 1;
     mach_vm_size_t size = 0;
     uint64_t cbAllMemoryRegions = 0;
+    uint64_t cbSharedCacheRegions = 0;
     uint32_t depth = 0;
 
     // First enumerate and add all the regions
@@ -138,7 +139,14 @@ CrashInfo::EnumerateMemoryRegions()
         }
         else
         {
-            if (info.share_mode != SM_EMPTY && (info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) != 0)
+            // NativeAOT dump analysis only needs the application/runtime image. The dyld
+            // shared cache accounts for most of a macOS full dump and can be recovered
+            // from the matching OS installation when system-library symbols are needed.
+            if (m_appModel == AppModelType::NativeAOT && info.user_tag == VM_MEMORY_SHARED_PMAP)
+            {
+                cbSharedCacheRegions += size;
+            }
+            else if (info.share_mode != SM_EMPTY && (info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) != 0)
             {
                 MemoryRegion memoryRegion(ConvertProtectionFlags(info.protection), address, address + size, info.offset);
                 m_allMemoryRegions.insert(memoryRegion);
@@ -164,7 +172,10 @@ CrashInfo::EnumerateMemoryRegions()
         return false;
     }
 
-    TRACE("EnumerateMemoryRegions: cbAllMemoryRegions %06llx native cbModuleMappings %06llx\n", cbAllMemoryRegions / PAGE_SIZE, m_cbModuleMappings / PAGE_SIZE);
+    TRACE("EnumerateMemoryRegions: cbAllMemoryRegions %06llx shared cache omitted %06llx native cbModuleMappings %06llx\n",
+        cbAllMemoryRegions / PAGE_SIZE,
+        cbSharedCacheRegions / PAGE_SIZE,
+        m_cbModuleMappings / PAGE_SIZE);
     return true;
 }
 
@@ -285,6 +296,13 @@ void CrashInfo::VisitModule(MachOModule& module)
 
 void CrashInfo::VisitSegment(MachOModule& module, const segment_command_64& segment)
 {
+    // These module segments are already omitted from m_allMemoryRegions above.
+    // Do not reintroduce them through the full-dump module mapping list.
+    if (m_appModel == AppModelType::NativeAOT && (module.Header().flags & MH_DYLIB_IN_CACHE) != 0)
+    {
+        return;
+    }
+
     if (segment.initprot != 0)
     {
         // The __LINKEDIT segment contains the raw data used by dynamic linker, such as symbol,
